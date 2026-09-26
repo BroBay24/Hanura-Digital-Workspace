@@ -4,10 +4,7 @@ import { globalIgnores } from 'eslint/config'
 import { tanstackConfig } from '@tanstack/eslint-config'
 
 export default [
-  globalIgnores([
-    '.output/',
-    'dist/',
-  ]),
+  globalIgnores(['.output/', 'dist/']),
 
   ...tanstackConfig,
 
