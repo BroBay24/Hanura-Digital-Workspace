@@ -8,6 +8,7 @@ import {
   pgTable,
   text,
   timestamp,
+  unique,
   uuid,
   varchar,
 } from 'drizzle-orm/pg-core'
@@ -58,7 +59,10 @@ export const loanApplications = pgTable(
       .notNull(),
   },
   (table) => [
-    index('loan_applications_member_idx').on(table.memberReferenceId),
+    index('loan_applications_member_updated_idx').on(
+      table.memberReferenceId,
+      table.updatedAt,
+    ),
     index('loan_applications_status_updated_idx').on(
       table.status,
       table.updatedAt,
@@ -123,7 +127,7 @@ export const creditReviews = pgTable(
       .notNull(),
   },
   (table) => [
-    index('credit_reviews_application_idx').on(table.loanApplicationId),
+    unique('credit_reviews_application_unique').on(table.loanApplicationId),
     index('credit_reviews_reviewer_idx').on(table.reviewerUserId),
     check('credit_reviews_version_positive', sql`${table.version} > 0`),
   ],

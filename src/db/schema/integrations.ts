@@ -69,7 +69,8 @@ export const integrationSyncJobs = pgTable(
     correlationId: text('correlation_id'),
   },
   (table) => [
-    index('integration_sync_jobs_status_started_idx').on(
+    index('integration_sync_jobs_provider_status_started_idx').on(
+      table.providerKey,
       table.status,
       table.startedAt,
     ),

@@ -58,7 +58,11 @@ export const approvals = pgTable(
       table.cycleNo,
     ),
     index('approvals_actor_idx').on(table.actorUserId),
-    index('approvals_status_created_idx').on(table.status, table.createdAt),
+    index('approvals_status_stage_created_idx').on(
+      table.status,
+      table.stage,
+      table.createdAt,
+    ),
     check('approvals_cycle_positive', sql`${table.cycleNo} > 0`),
     check('approvals_version_positive', sql`${table.version} > 0`),
   ],

@@ -3,6 +3,7 @@ import type { AnyPgColumn } from 'drizzle-orm/pg-core'
 import {
   bigint,
   check,
+  foreignKey,
   index,
   integer,
   pgEnum,
@@ -30,44 +31,13 @@ export const documentVerificationAction = pgEnum(
   ['VERIFIED', 'REJECTED', 'REUPLOAD_REQUESTED'],
 )
 
-export const documents = pgTable(
-  'documents',
-  {
-    id: uuid('id').defaultRandom().primaryKey(),
-    memberReferenceId: uuid('member_reference_id').references(
-      () => memberReferences.id,
-    ),
-    loanApplicationId: uuid('loan_application_id').references(
-      () => loanApplications.id,
-    ),
-    documentType: varchar('document_type', { length: 100 }).notNull(),
-    status: documentStatus('status').default('REQUIRED').notNull(),
-    currentVersionId: uuid('current_version_id').references(
-      (): AnyPgColumn => documentVersions.id,
-      { onDelete: 'set null' },
-    ),
-    createdAt: timestamp('created_at', { withTimezone: true })
-      .defaultNow()
-      .notNull(),
-    updatedAt: timestamp('updated_at', { withTimezone: true })
-      .defaultNow()
-      .$onUpdate(() => new Date())
-      .notNull(),
-  },
-  (table) => [
-    index('documents_member_idx').on(table.memberReferenceId),
-    index('documents_loan_idx').on(table.loanApplicationId),
-    index('documents_current_version_idx').on(table.currentVersionId),
-  ],
-)
-
 export const documentVersions = pgTable(
   'document_versions',
   {
     id: uuid('id').defaultRandom().primaryKey(),
     documentId: uuid('document_id')
       .notNull()
-      .references(() => documents.id),
+      .references((): AnyPgColumn => documents.id),
     versionNo: integer('version_no').notNull(),
     storageKey: text('storage_key').notNull(),
     originalName: text('original_name').notNull(),
@@ -86,9 +56,52 @@ export const documentVersions = pgTable(
       table.documentId,
       table.versionNo,
     ),
+    unique('document_versions_document_id_id_unique').on(
+      table.documentId,
+      table.id,
+    ),
     index('document_versions_uploaded_by_idx').on(table.uploadedBy),
     check('document_versions_version_positive', sql`${table.versionNo} > 0`),
     check('document_versions_size_nonnegative', sql`${table.sizeBytes} >= 0`),
+  ],
+)
+
+export const documents = pgTable(
+  'documents',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    memberReferenceId: uuid('member_reference_id').references(
+      () => memberReferences.id,
+    ),
+    loanApplicationId: uuid('loan_application_id').references(
+      () => loanApplications.id,
+    ),
+    documentType: varchar('document_type', { length: 100 }).notNull(),
+    status: documentStatus('status').default('REQUIRED').notNull(),
+    currentVersionId: uuid('current_version_id'),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .defaultNow()
+      .$onUpdate(() => new Date())
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.id, table.currentVersionId],
+      foreignColumns: [documentVersions.documentId, documentVersions.id],
+      name: 'documents_current_version_same_document_fk',
+    }),
+    index('documents_member_type_idx').on(
+      table.memberReferenceId,
+      table.documentType,
+    ),
+    index('documents_loan_status_idx').on(
+      table.loanApplicationId,
+      table.status,
+    ),
+    index('documents_current_version_idx').on(table.currentVersionId),
   ],
 )
 
