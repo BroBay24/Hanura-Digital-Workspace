@@ -65,11 +65,12 @@ export const errorResponse = (
   message: string,
   fieldErrors?: Record<string, Array<string>>,
   sourceHeaders?: Headers,
+  correlationId = correlationIdFor(request),
 ) => {
   const error = {
     code,
     message,
-    correlationId: correlationIdFor(request),
+    correlationId,
     ...(fieldErrors ? { fieldErrors } : {}),
   }
   return jsonResponse({ error }, status, sourceHeaders)

@@ -7,7 +7,10 @@ import { serverEnv } from '#/env.server'
 import { auth } from '#/lib/auth'
 import { loginHandler } from '#/routes/api/v1/auth/login'
 import { logoutHandler } from '#/routes/api/v1/auth/logout'
-import { sessionHandler } from '#/routes/api/v1/auth/session'
+import {
+  createSessionHandler,
+  sessionHandler,
+} from '#/routes/api/v1/auth/session'
 import { demoIdentities } from './provision-demo-auth.ts'
 
 const origin = new URL(serverEnv.BETTER_AUTH_URL).origin
@@ -80,9 +83,16 @@ test('application login and session contract works for all demo identities', asy
 
     const cookie = cookieJar(loginResponse)
     const sessionResponse = await sessionHandler({
-      request: applicationRequest('/api/v1/auth/session', {
-        headers: { cookie },
-      }),
+      request: applicationRequest(
+        '/api/v1/auth/session?role=ADMIN&permission=*',
+        {
+          headers: {
+            cookie,
+            'x-hdw-role': 'ADMIN',
+            'x-hdw-permission': '*',
+          },
+        },
+      ),
     })
     assert.equal(sessionResponse.status, 200)
     const sessionBody = (await sessionResponse.json()) as {
@@ -90,12 +100,15 @@ test('application login and session contract works for all demo identities', asy
         authenticated: boolean
         user: { id: string; email: string; name: string }
         session: { expiresAt: string }
+        authorization: { roles: Array<string>; permissions: Array<string> }
       }
     }
     assert.equal(sessionBody.data.authenticated, true)
     assert.equal(sessionBody.data.user.id, loginBody.data.user.id)
     assert.equal(sessionBody.data.user.email, identity.email)
     assert.ok(Date.parse(sessionBody.data.session.expiresAt) > Date.now())
+    assert.deepEqual(sessionBody.data.authorization.roles, [identity.role])
+    assert.ok(sessionBody.data.authorization.permissions.length > 0)
     assertNoSensitiveFields(sessionBody)
 
     const userRow = await db.query.user.findFirst({
@@ -127,7 +140,12 @@ test('application login and session contract works for all demo identities', asy
       }),
     })
     assert.deepEqual(await afterLogout.json(), {
-      data: { authenticated: false, user: null, session: null },
+      data: {
+        authenticated: false,
+        user: null,
+        session: null,
+        authorization: null,
+      },
     })
   }
 })
@@ -226,7 +244,12 @@ test('session handles missing, malformed, and stale cookies safely', async () =>
     })
     assert.equal(response.status, 200)
     assert.deepEqual(await response.json(), {
-      data: { authenticated: false, user: null, session: null },
+      data: {
+        authenticated: false,
+        user: null,
+        session: null,
+        authorization: null,
+      },
     })
   }
 
@@ -249,7 +272,12 @@ test('session handles missing, malformed, and stale cookies safely', async () =>
     }),
   })
   assert.deepEqual(await stale.json(), {
-    data: { authenticated: false, user: null, session: null },
+    data: {
+      authenticated: false,
+      user: null,
+      session: null,
+      authorization: null,
+    },
   })
 })
 
@@ -262,6 +290,44 @@ test('logout is idempotent without a session', async () => {
     assert.deepEqual(await response.json(), {
       data: { authenticated: false },
     })
+  }
+})
+
+test('RBAC resolver failures return safe internal errors', async () => {
+  const loginResponse = await login(demoIdentities[0].email, password)
+  const cookie = cookieJar(loginResponse)
+  const failingHandler = createSessionHandler(async () => {
+    throw new Error('synthetic RBAC database failure')
+  })
+
+  const originalError = console.error
+  let logged: unknown
+  console.error = (...args: Array<unknown>) => {
+    logged = args
+  }
+
+  try {
+    const response = await failingHandler({
+      request: applicationRequest('/api/v1/auth/session', {
+        headers: { cookie },
+      }),
+    })
+    assert.equal(response.status, 500)
+    const body = (await response.json()) as {
+      error: { code: string; message: string; correlationId: string }
+    }
+    assert.equal(body.error.code, 'INTERNAL_ERROR')
+    assert.equal(typeof body.error.correlationId, 'string')
+    assert.doesNotMatch(JSON.stringify(body), /synthetic RBAC database failure/)
+    assert.ok(Array.isArray(logged))
+  } finally {
+    console.error = originalError
+    const userRow = await db.query.user.findFirst({
+      where: eq(user.email, demoIdentities[0].email),
+    })
+    if (userRow) {
+      await db.delete(session).where(eq(session.userId, userRow.id))
+    }
   }
 })
 
