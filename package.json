@@ -10,7 +10,9 @@
     "generate-routes": "tsr generate",
     "build": "vite build",
     "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
     "lint": "eslint",
+    "test": "node --env-file=.env.local --import tsx --test --test-concurrency=1 src/scripts/*.test.ts",
     "format": "prettier --write . && eslint --fix",
     "check": "prettier --check .",
     "db:generate": "drizzle-kit generate",
@@ -18,7 +20,8 @@
     "db:push": "drizzle-kit push",
     "db:pull": "drizzle-kit pull",
     "db:studio": "drizzle-kit studio",
-    "db:seed": "node --env-file=.env.local --import tsx src/db/seed.ts"
+    "db:seed": "node --env-file=.env.local --import tsx src/db/seed.ts",
+    "auth:provision-demo": "node --env-file=.env.local --import tsx src/scripts/provision-demo-auth.ts"
   },
   "dependencies": {
     "@faker-js/faker": "^10.3.0",

@@ -11,6 +11,9 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
+import { Route as ApiV1AuthLoginRouteImport } from './routes/api/v1/auth/login'
+import { Route as ApiV1AuthLogoutRouteImport } from './routes/api/v1/auth/logout'
+import { Route as ApiV1AuthSessionRouteImport } from './routes/api/v1/auth/session'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -22,31 +25,74 @@ const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   path: '/api/auth/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiV1AuthLoginRoute = ApiV1AuthLoginRouteImport.update({
+  id: '/api/v1/auth/login',
+  path: '/api/v1/auth/login',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiV1AuthLogoutRoute = ApiV1AuthLogoutRouteImport.update({
+  id: '/api/v1/auth/logout',
+  path: '/api/v1/auth/logout',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiV1AuthSessionRoute = ApiV1AuthSessionRouteImport.update({
+  id: '/api/v1/auth/session',
+  path: '/api/v1/auth/session',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/v1/auth/login': typeof ApiV1AuthLoginRoute
+  '/api/v1/auth/logout': typeof ApiV1AuthLogoutRoute
+  '/api/v1/auth/session': typeof ApiV1AuthSessionRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/v1/auth/login': typeof ApiV1AuthLoginRoute
+  '/api/v1/auth/logout': typeof ApiV1AuthLogoutRoute
+  '/api/v1/auth/session': typeof ApiV1AuthSessionRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/v1/auth/login': typeof ApiV1AuthLoginRoute
+  '/api/v1/auth/logout': typeof ApiV1AuthLogoutRoute
+  '/api/v1/auth/session': typeof ApiV1AuthSessionRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/api/auth/$'
+  fullPaths:
+    | '/'
+    | '/api/auth/$'
+    | '/api/v1/auth/login'
+    | '/api/v1/auth/logout'
+    | '/api/v1/auth/session'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/api/auth/$'
-  id: '__root__' | '/' | '/api/auth/$'
+  to:
+    | '/'
+    | '/api/auth/$'
+    | '/api/v1/auth/login'
+    | '/api/v1/auth/logout'
+    | '/api/v1/auth/session'
+  id:
+    | '__root__'
+    | '/'
+    | '/api/auth/$'
+    | '/api/v1/auth/login'
+    | '/api/v1/auth/logout'
+    | '/api/v1/auth/session'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
+  ApiV1AuthLoginRoute: typeof ApiV1AuthLoginRoute
+  ApiV1AuthLogoutRoute: typeof ApiV1AuthLogoutRoute
+  ApiV1AuthSessionRoute: typeof ApiV1AuthSessionRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -65,12 +111,36 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAuthSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/v1/auth/login': {
+      id: '/api/v1/auth/login'
+      path: '/api/v1/auth/login'
+      fullPath: '/api/v1/auth/login'
+      preLoaderRoute: typeof ApiV1AuthLoginRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/v1/auth/logout': {
+      id: '/api/v1/auth/logout'
+      path: '/api/v1/auth/logout'
+      fullPath: '/api/v1/auth/logout'
+      preLoaderRoute: typeof ApiV1AuthLogoutRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/v1/auth/session': {
+      id: '/api/v1/auth/session'
+      path: '/api/v1/auth/session'
+      fullPath: '/api/v1/auth/session'
+      preLoaderRoute: typeof ApiV1AuthSessionRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
+  ApiV1AuthLoginRoute: ApiV1AuthLoginRoute,
+  ApiV1AuthLogoutRoute: ApiV1AuthLogoutRoute,
+  ApiV1AuthSessionRoute: ApiV1AuthSessionRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
