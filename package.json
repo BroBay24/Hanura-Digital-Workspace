@@ -12,7 +12,7 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "lint": "eslint",
-    "test": "node --env-file=.env.local --import tsx --test --test-concurrency=1 src/scripts/*.test.ts",
+    "test": "node --env-file=.env.local --import tsx --test --test-concurrency=1 src/scripts/*.test.ts src/scripts/*.test.tsx",
     "format": "prettier --write . && eslint --fix",
     "check": "prettier --check .",
     "db:generate": "drizzle-kit generate",
