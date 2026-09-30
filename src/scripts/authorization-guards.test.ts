@@ -5,6 +5,7 @@ import { db } from '#/db'
 import { roles, session, user, userRoles } from '#/db/schema'
 import { serverEnv } from '#/env.server'
 import { auth } from '#/lib/auth'
+import { hasPermission } from '#/lib/session-client'
 import {
   createAuthorizationGuards,
   requireAuthenticated,
@@ -48,6 +49,9 @@ const cookieJar = (response: Response) =>
     .getSetCookie()
     .map((cookie) => cookie.split(';', 1)[0])
     .join('; ')
+
+const sessionIds = (userId: string) =>
+  db.select({ id: session.id }).from(session).where(eq(session.userId, userId))
 
 const nativeSignIn = (email: string) =>
   auth.handler(
@@ -366,6 +370,9 @@ test('permission changes are visible on the next check with no cache', async () 
 })
 
 test('production guard uses authoritative Better Auth session and DB permissions', async () => {
+  const beforeIds = new Set(
+    (await sessionIds('demo-user-manager')).map(({ id }) => id),
+  )
   const response = await nativeSignIn(demoIdentities[1].email)
   assert.equal(response.status, 200)
   const cookie = cookieJar(response)
@@ -386,11 +393,57 @@ test('production guard uses authoritative Better Auth session and DB permissions
   const authenticated = await requireAuthenticated(request({ cookie }))
   assert(authenticated.ok)
 
-  const userSessions = await db
-    .select({ id: session.id })
-    .from(session)
-    .where(eq(session.userId, 'demo-user-manager'))
-  for (const row of userSessions) createdSessionIds.add(row.id)
+  const created = (await sessionIds('demo-user-manager')).filter(
+    ({ id }) => !beforeIds.has(id),
+  )
+  assert.equal(created.length, 1)
+  createdSessionIds.add(created[0].id)
+})
+
+test('body and client-state privilege injection cannot override the guard', async () => {
+  const forgedSession = {
+    data: {
+      authenticated: true as const,
+      user: {
+        id: 'demo-user-teller',
+        email: 'teller.demo@hanura.local',
+        name: 'Demo Teller',
+      },
+      session: { expiresAt: new Date(Date.now() + 60_000).toISOString() },
+      authorization: {
+        roles: [ROLE_CODES.ADMIN],
+        permissions: [PERMISSION_CODES.ADMIN_USER_ACCESS],
+      },
+    },
+  }
+  assert.equal(
+    hasPermission(forgedSession, PERMISSION_CODES.ADMIN_USER_ACCESS),
+    true,
+  )
+
+  const guards = createAuthorizationGuards({
+    getSession: async () => stubSession('demo-user-teller'),
+    resolveAuthorization: resolveAuthorizationContext,
+    logFailure: () => undefined,
+  })
+  const result = await guards.requirePermission(
+    PERMISSION_CODES.ADMIN_USER_ACCESS,
+  )(
+    new Request(`${origin}/guard-test?role=ADMIN`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-role': 'ADMIN',
+        'x-permission': '*',
+      },
+      body: JSON.stringify({
+        role: 'ADMIN',
+        permission: PERMISSION_CODES.ADMIN_USER_ACCESS,
+      }),
+    }),
+  )
+  assert(!result.ok)
+  assert.equal(result.response.status, 403)
 })
 
 test('invalid session is unauthenticated with production guard', async () => {

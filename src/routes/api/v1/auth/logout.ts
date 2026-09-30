@@ -10,12 +10,15 @@ import {
 export const logoutHandler = async ({ request }: AuthRouteContext) => {
   const nativeResponse = await callNativeAuth(request, '/api/auth/sign-out', {})
 
-  if (nativeResponse.status >= 500) {
+  if (!nativeResponse.ok) {
+    const internalFailure = nativeResponse.status >= 500
     return errorResponse(
       request,
-      500,
-      'INTERNAL_ERROR',
-      'Layanan autentikasi sedang bermasalah.',
+      internalFailure ? 500 : 403,
+      internalFailure ? 'INTERNAL_ERROR' : 'FORBIDDEN',
+      internalFailure
+        ? 'Layanan autentikasi sedang bermasalah.'
+        : 'Permintaan keluar ditolak.',
       undefined,
       nativeResponse.headers,
     )

@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict'
 import { after, test } from 'node:test'
-import { eq, inArray } from 'drizzle-orm'
+import { count, eq, inArray } from 'drizzle-orm'
 import { db } from '#/db'
 import { session, user } from '#/db/schema'
 import { serverEnv } from '#/env.server'
 import { auth } from '#/lib/auth'
+import { PERMISSION_CODES } from '#/lib/authorization'
 import { loginHandler } from '#/routes/api/v1/auth/login'
 import { logoutHandler } from '#/routes/api/v1/auth/logout'
 import {
@@ -49,11 +50,70 @@ const login = (email: string, candidatePassword: string) =>
     }),
   })
 
+const sensitiveKeys = new Set([
+  'accessToken',
+  'account',
+  'cookie',
+  'idToken',
+  'refreshToken',
+  'secret',
+  'sessionToken',
+  'token',
+])
+
 const assertNoSensitiveFields = (body: unknown) => {
   const serialized = JSON.stringify(body)
   assert.equal(serialized.includes(password), false)
-  assert.doesNotMatch(serialized.toLowerCase(), /"(?:token|account)"\s*:/)
+  const inspect = (value: unknown): void => {
+    if (!value || typeof value !== 'object') return
+    if (Array.isArray(value)) {
+      for (const item of value) inspect(item)
+      return
+    }
+    for (const [key, child] of Object.entries(value)) {
+      assert.equal(sensitiveKeys.has(key), false, `sensitive field: ${key}`)
+      inspect(child)
+    }
+  }
+  inspect(body)
 }
+
+const expectedPermissions = {
+  ADMIN: [
+    PERMISSION_CODES.ADMIN_USER_ACCESS,
+    PERMISSION_CODES.AUDIT_READ,
+    PERMISSION_CODES.INTEGRATION_READ,
+    PERMISSION_CODES.SETTINGS_MANAGE,
+  ],
+  CHAIRMAN: [
+    PERMISSION_CODES.APPROVAL_CHAIRMAN_DECIDE,
+    PERMISSION_CODES.MEMBER_READ,
+    PERMISSION_CODES.REPORT_READ,
+  ],
+  CREDIT_OFFICER: [
+    PERMISSION_CODES.CREDIT_REVIEW_COMPLETE,
+    PERMISSION_CODES.DOCUMENT_UPLOAD,
+    PERMISSION_CODES.DOCUMENT_VERIFY,
+    PERMISSION_CODES.LOAN_CREATE,
+    PERMISSION_CODES.LOAN_SUBMIT,
+    PERMISSION_CODES.LOAN_UPDATE_DRAFT,
+    PERMISSION_CODES.MEMBER_READ,
+  ],
+  MANAGER: [
+    PERMISSION_CODES.APPROVAL_MANAGER_DECIDE,
+    PERMISSION_CODES.MEMBER_READ,
+    PERMISSION_CODES.REPORT_READ,
+  ],
+  TELLER: [PERMISSION_CODES.MEMBER_READ],
+} as const
+
+const sessionIds = (userId?: string) =>
+  userId
+    ? db
+        .select({ id: session.id })
+        .from(session)
+        .where(eq(session.userId, userId))
+    : db.select({ id: session.id }).from(session)
 
 const createdSessionIds = new Set<string>()
 
@@ -66,10 +126,29 @@ after(async () => {
 
 test('application login and session contract works for all demo identities', async () => {
   for (const identity of demoIdentities) {
+    const userRow = await db.query.user.findFirst({
+      where: eq(user.email, identity.email),
+    })
+    assert.ok(userRow)
+    const beforeIds = new Set(
+      (await sessionIds(userRow.id)).map(({ id }) => id),
+    )
+
     const loginResponse = await login(identity.email.toUpperCase(), password)
     assert.equal(loginResponse.status, 200)
     assert.equal(loginResponse.headers.get('cache-control'), 'no-store')
-    assert.ok(loginResponse.headers.getSetCookie().length > 0)
+    const loginCookies = loginResponse.headers.getSetCookie()
+    assert.ok(loginCookies.length > 0)
+    const serializedCookies = loginCookies.join(';').toLowerCase()
+    assert.match(serializedCookies, /httponly/)
+    assert.match(serializedCookies, /samesite=lax/)
+    assert.match(serializedCookies, /path=\//)
+    if (
+      process.env.NODE_ENV === 'production' ||
+      origin.startsWith('https://')
+    ) {
+      assert.match(serializedCookies, /secure/)
+    }
 
     const loginBody = (await loginResponse.json()) as {
       data: {
@@ -80,6 +159,14 @@ test('application login and session contract works for all demo identities', asy
     assert.equal(loginBody.data.authenticated, true)
     assert.equal(loginBody.data.user.email, identity.email)
     assertNoSensitiveFields(loginBody)
+
+    const created = (await sessionIds(userRow.id)).filter(
+      ({ id }) => !beforeIds.has(id),
+    )
+    assert.equal(created.length, 1)
+    const [createdSession] = created
+    assert.ok(createdSession)
+    createdSessionIds.add(createdSession.id)
 
     const cookie = cookieJar(loginResponse)
     const sessionResponse = await sessionHandler({
@@ -108,18 +195,11 @@ test('application login and session contract works for all demo identities', asy
     assert.equal(sessionBody.data.user.email, identity.email)
     assert.ok(Date.parse(sessionBody.data.session.expiresAt) > Date.now())
     assert.deepEqual(sessionBody.data.authorization.roles, [identity.role])
-    assert.ok(sessionBody.data.authorization.permissions.length > 0)
+    assert.deepEqual(
+      sessionBody.data.authorization.permissions,
+      expectedPermissions[identity.role],
+    )
     assertNoSensitiveFields(sessionBody)
-
-    const userRow = await db.query.user.findFirst({
-      where: eq(user.email, identity.email),
-    })
-    assert.ok(userRow)
-    const userSessions = await db
-      .select({ id: session.id })
-      .from(session)
-      .where(eq(session.userId, userRow.id))
-    for (const row of userSessions) createdSessionIds.add(row.id)
 
     const logoutResponse = await logoutHandler({
       request: applicationRequest('/api/v1/auth/logout', {
@@ -128,15 +208,16 @@ test('application login and session contract works for all demo identities', asy
       }),
     })
     assert.equal(logoutResponse.status, 200)
-    assert.ok(logoutResponse.headers.getSetCookie().length > 0)
+    const logoutCookies = logoutResponse.headers.getSetCookie()
+    assert.ok(logoutCookies.length > 0)
+    assert.match(logoutCookies.join(';').toLowerCase(), /max-age=0|expires=/)
     const logoutBody = await logoutResponse.json()
     assert.deepEqual(logoutBody, { data: { authenticated: false } })
     assertNoSensitiveFields(logoutBody)
 
-    const clearedCookie = cookieJar(logoutResponse)
     const afterLogout = await sessionHandler({
       request: applicationRequest('/api/v1/auth/session', {
-        headers: { cookie: clearedCookie },
+        headers: { cookie },
       }),
     })
     assert.deepEqual(await afterLogout.json(), {
@@ -147,10 +228,18 @@ test('application login and session contract works for all demo identities', asy
         authorization: null,
       },
     })
+    assert.equal(
+      (await sessionIds(userRow.id)).some(({ id }) => id === createdSession.id),
+      false,
+    )
+    createdSessionIds.delete(createdSession.id)
   }
 })
 
 test('invalid credentials do not enumerate users', async () => {
+  const [{ value: sessionsBefore }] = await db
+    .select({ value: count() })
+    .from(session)
   const correlationId = 'hdw-auth-invalid-credentials'
   const wrongPassword = await login(
     demoIdentities[0].email,
@@ -195,9 +284,16 @@ test('invalid credentials do not enumerate users', async () => {
     error: { correlationId: string }
   }
   assert.equal(correlationBody.error.correlationId, correlationId)
+  const [{ value: sessionsAfter }] = await db
+    .select({ value: count() })
+    .from(session)
+  assert.equal(Number(sessionsAfter), Number(sessionsBefore))
 })
 
 test('login validation errors are stable and safe', async () => {
+  const [{ value: sessionsBefore }] = await db
+    .select({ value: count() })
+    .from(session)
   const cases: Array<unknown> = [
     { email: 'not-an-email', password },
     { password },
@@ -229,6 +325,10 @@ test('login validation errors are stable and safe', async () => {
     }),
   })
   assert.equal(malformed.status, 400)
+  const [{ value: sessionsAfter }] = await db
+    .select({ value: count() })
+    .from(session)
+  assert.equal(Number(sessionsAfter), Number(sessionsBefore))
 })
 
 test('session handles missing, malformed, and stale cookies safely', async () => {
@@ -253,18 +353,22 @@ test('session handles missing, malformed, and stale cookies safely', async () =>
     })
   }
 
-  const loginResponse = await login(demoIdentities[0].email, password)
-  const cookie = cookieJar(loginResponse)
   const userRow = await db.query.user.findFirst({
     where: eq(user.email, demoIdentities[0].email),
   })
   assert.ok(userRow)
-  const userSessions = await db
-    .select({ id: session.id })
-    .from(session)
-    .where(eq(session.userId, userRow.id))
-  await db.delete(session).where(eq(session.userId, userRow.id))
-  for (const row of userSessions) createdSessionIds.delete(row.id)
+  const beforeIds = new Set((await sessionIds(userRow.id)).map(({ id }) => id))
+  const loginResponse = await login(demoIdentities[0].email, password)
+  const cookie = cookieJar(loginResponse)
+  const created = (await sessionIds(userRow.id)).filter(
+    ({ id }) => !beforeIds.has(id),
+  )
+  assert.equal(created.length, 1)
+  const [createdSession] = created
+  assert.ok(createdSession)
+  createdSessionIds.add(createdSession.id)
+  await db.delete(session).where(eq(session.id, createdSession.id))
+  createdSessionIds.delete(createdSession.id)
 
   const stale = await sessionHandler({
     request: applicationRequest('/api/v1/auth/session', {
@@ -294,8 +398,20 @@ test('logout is idempotent without a session', async () => {
 })
 
 test('RBAC resolver failures return safe internal errors', async () => {
+  const userRow = await db.query.user.findFirst({
+    where: eq(user.email, demoIdentities[0].email),
+  })
+  assert.ok(userRow)
+  const beforeIds = new Set((await sessionIds(userRow.id)).map(({ id }) => id))
   const loginResponse = await login(demoIdentities[0].email, password)
   const cookie = cookieJar(loginResponse)
+  const created = (await sessionIds(userRow.id)).filter(
+    ({ id }) => !beforeIds.has(id),
+  )
+  assert.equal(created.length, 1)
+  const [createdSession] = created
+  assert.ok(createdSession)
+  createdSessionIds.add(createdSession.id)
   const failingHandler = createSessionHandler(async () => {
     throw new Error('synthetic RBAC database failure')
   })
@@ -322,12 +438,56 @@ test('RBAC resolver failures return safe internal errors', async () => {
     assert.ok(Array.isArray(logged))
   } finally {
     console.error = originalError
-    const userRow = await db.query.user.findFirst({
-      where: eq(user.email, demoIdentities[0].email),
+    await db.delete(session).where(eq(session.id, createdSession.id))
+    createdSessionIds.delete(createdSession.id)
+  }
+})
+
+test('cross-origin logout is rejected and cannot invalidate the session', async () => {
+  const userRow = await db.query.user.findFirst({
+    where: eq(user.email, demoIdentities[1].email),
+  })
+  assert.ok(userRow)
+  const beforeIds = new Set((await sessionIds(userRow.id)).map(({ id }) => id))
+  const loginResponse = await login(demoIdentities[1].email, password)
+  const cookie = cookieJar(loginResponse)
+  const created = (await sessionIds(userRow.id)).filter(
+    ({ id }) => !beforeIds.has(id),
+  )
+  assert.equal(created.length, 1)
+  const [createdSession] = created
+  assert.ok(createdSession)
+  createdSessionIds.add(createdSession.id)
+
+  const originalError = console.error
+  console.error = () => undefined
+  try {
+    const rejected = await logoutHandler({
+      request: applicationRequest('/api/v1/auth/logout', {
+        method: 'POST',
+        headers: { cookie, origin: 'https://attacker.invalid' },
+      }),
     })
-    if (userRow) {
-      await db.delete(session).where(eq(session.userId, userRow.id))
+    assert.equal(rejected.status, 403)
+    const rejectedBody = (await rejected.json()) as {
+      error: { code: string }
     }
+    assert.equal(rejectedBody.error.code, 'FORBIDDEN')
+    assertNoSensitiveFields(rejectedBody)
+
+    const stillAuthenticated = await sessionHandler({
+      request: applicationRequest('/api/v1/auth/session', {
+        headers: { cookie },
+      }),
+    })
+    const body = (await stillAuthenticated.json()) as {
+      data: { authenticated: boolean }
+    }
+    assert.equal(body.data.authenticated, true)
+  } finally {
+    console.error = originalError
+    await db.delete(session).where(eq(session.id, createdSession.id))
+    createdSessionIds.delete(createdSession.id)
   }
 })
 
