@@ -310,8 +310,115 @@ test(
       await client.send('Page.enable')
       await client.send('Runtime.enable')
       await client.send('Network.enable')
+      await client.send('Emulation.setDeviceMetricsOverride', {
+        width: 1440,
+        height: 900,
+        deviceScaleFactor: 1,
+        mobile: false,
+      })
       await client.waitFor(
         "document.querySelector('#email') instanceof HTMLInputElement",
+      )
+
+      await context.test(
+        'direct unauthenticated shell access redirects without protected content',
+        async () => {
+          await client.send('Network.clearBrowserCookies')
+          const initial = await fetch(`${origin}/`, { redirect: 'manual' })
+          assert.ok([301, 302, 307, 308].includes(initial.status))
+          assert.equal(
+            new URL(initial.headers.get('location') ?? '', origin).pathname,
+            '/login',
+          )
+          assert.doesNotMatch(
+            await initial.text(),
+            /Sesi aktif|Ruang kerja siap digunakan|data-app-shell="true"/,
+          )
+
+          await client.navigate(`${origin}/`)
+          await client.waitFor(
+            "location.pathname === '/login' && document.querySelector('#email') instanceof HTMLInputElement",
+          )
+          assert.equal(
+            await client.evaluate(
+              "document.querySelectorAll('[data-app-shell=true]').length",
+            ),
+            0,
+          )
+          const text = await client.evaluate<string>('document.body.innerText')
+          assert.doesNotMatch(text, /Sesi aktif|Ruang kerja siap digunakan/)
+        },
+      )
+
+      await context.test(
+        'session API polling failure remains a recoverable shell error',
+        async () => {
+          await client.send('Network.clearBrowserCookies')
+          const loginStatus = await client.evaluate<number>(
+            `fetch('/api/v1/auth/login', {
+              method: 'POST',
+              credentials: 'include',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ email: ${JSON.stringify(demoIdentities[1].email)}, password: ${JSON.stringify(password)} }),
+            }).then((response) => response.status)`,
+          )
+          assert.equal(loginStatus, 200)
+          await client.navigate(`${origin}/`)
+          await client.waitFor(
+            "location.pathname === '/' && document.body.textContent?.includes('Ruang kerja siap digunakan')",
+          )
+
+          await client.send('Fetch.enable', {
+            patterns: [
+              {
+                urlPattern: '*/api/v1/auth/session',
+                requestStage: 'Request',
+              },
+            ],
+          })
+          const paused = client.once<{ requestId: string }>(
+            'Fetch.requestPaused',
+            70_000,
+          )
+          const request = await paused
+          await client.send('Fetch.fulfillRequest', {
+            requestId: request.requestId,
+            responseCode: 500,
+            responseHeaders: [
+              { name: 'content-type', value: 'application/json' },
+              { name: 'cache-control', value: 'no-store' },
+            ],
+            body: Buffer.from(
+              JSON.stringify({
+                error: {
+                  code: 'INTERNAL_ERROR',
+                  message: 'Layanan sedang bermasalah.',
+                  correlationId: 'shell-browser-test',
+                },
+              }),
+            ).toString('base64'),
+          })
+          await client.send('Fetch.disable')
+          await client.waitFor(
+            "location.pathname === '/' && document.body.textContent?.includes('Ruang kerja tidak dapat dimuat') && document.body.textContent?.includes('Coba lagi')",
+          )
+          assert.equal(
+            await client.evaluate(
+              "document.body.textContent?.includes('Ruang kerja siap digunakan')",
+            ),
+            false,
+          )
+
+          const logoutStatus = await client.evaluate<number>(
+            "fetch('/api/v1/auth/logout', { method: 'POST', credentials: 'include' }).then((response) => response.status)",
+          )
+          assert.equal(logoutStatus, 200)
+          await client.send('Network.clearBrowserCookies')
+          await client.navigate(`${origin}/login`)
+          await client.waitFor(
+            "document.querySelector('#email') instanceof HTMLInputElement",
+          )
+        },
       )
 
       await context.test(
@@ -372,6 +479,18 @@ test(
               identity.role,
             ])
 
+            assert.equal(
+              await client.evaluate(
+                "document.querySelectorAll('[data-app-shell=true]').length",
+              ),
+              1,
+            )
+            assert.equal(
+              await client.evaluate(
+                "Boolean(document.querySelector('nav[aria-label=\"Navigasi utama\"]') && document.querySelector('main#main-content')?.textContent?.includes('Ruang kerja siap digunakan'))",
+              ),
+              true,
+            )
             const text = await client.evaluate<string>(
               'document.body.innerText',
             )
@@ -444,6 +563,67 @@ test(
           )
           await new Promise((resolve) => setTimeout(resolve, 500))
           assert.equal(await client.evaluate("location.pathname === '/'"), true)
+          assert.equal(
+            await client.evaluate(
+              "document.querySelectorAll('[data-app-shell=true]').length",
+            ),
+            1,
+          )
+
+          await client.navigate(`${origin}/`)
+          await client.waitFor(
+            "location.pathname === '/' && document.body.textContent?.includes('Ruang kerja siap digunakan')",
+          )
+          const geometry = await client.evaluate<{
+            sidebarWidth: number
+            headerHeight: number
+            mainLeft: number
+            viewportWidth: number
+          }>(`(() => {
+            const sidebar = document.querySelector('aside')?.getBoundingClientRect()
+            const header = document.querySelector('header')?.getBoundingClientRect()
+            const main = document.querySelector('main#main-content')?.getBoundingClientRect()
+            return {
+              sidebarWidth: sidebar?.width ?? 0,
+              headerHeight: header?.height ?? 0,
+              mainLeft: main?.left ?? 0,
+              viewportWidth: innerWidth,
+            }
+          })()`)
+          assert.deepEqual(geometry, {
+            sidebarWidth: 240,
+            headerHeight: 72,
+            mainLeft: 240,
+            viewportWidth: 1440,
+          })
+
+          await client.send('Emulation.setDeviceMetricsOverride', {
+            width: 1024,
+            height: 768,
+            deviceScaleFactor: 1,
+            mobile: false,
+          })
+          const laptop = await client.evaluate<{
+            width: number
+            sidebarWidth: number
+          }>(`({
+            width: document.documentElement.scrollWidth,
+            sidebarWidth: document.querySelector('aside')?.getBoundingClientRect().width ?? 0,
+          })`)
+          assert.deepEqual(laptop, { width: 1024, sidebarWidth: 240 })
+
+          await client.send('Emulation.setDeviceMetricsOverride', {
+            width: 1440,
+            height: 900,
+            deviceScaleFactor: 1,
+            mobile: false,
+          })
+          assert.equal(
+            await client.evaluate(
+              "document.querySelector('a[href=\"#main-content\"]')?.textContent?.includes('Lewati ke konten utama')",
+            ),
+            true,
+          )
 
           await client.evaluate(
             "document.querySelector('summary')?.click(); true",
@@ -469,10 +649,10 @@ test(
           const [createdSession] = createdSessions
           assert.ok(createdSession)
           await db.delete(session).where(eq(session.id, createdSession.id))
+          await client.navigate(`${origin}/`)
 
           await client.waitFor(
             "location.pathname === '/login' && new URLSearchParams(location.search).get('reason') === 'session-expired' && document.body.textContent?.includes('Session Expired')",
-            70_000,
           )
           await new Promise((resolve) => setTimeout(resolve, 500))
           assert.equal(
@@ -497,38 +677,75 @@ test(
         },
       )
 
-      await context.test('narrow viewport keeps login usable', async () => {
-        await client.send('Emulation.setDeviceMetricsOverride', {
-          width: 390,
-          height: 844,
-          deviceScaleFactor: 1,
-          mobile: true,
-        })
-        await client.navigate(`${origin}/login`)
-        await client.waitFor(
-          "document.querySelector('#email') instanceof HTMLInputElement",
-        )
-        const layout = await client.evaluate<{
-          width: number
-          emailWidth: number
-          passwordWidth: number
-          buttonWidth: number
-        }>(`(() => {
-          const email = document.querySelector('#email')?.getBoundingClientRect()
-          const passwordInput = document.querySelector('#password')?.getBoundingClientRect()
-          const button = document.querySelector('button[type=submit]')?.getBoundingClientRect()
-          return {
-            width: document.documentElement.scrollWidth,
-            emailWidth: email?.width ?? 0,
-            passwordWidth: passwordInput?.width ?? 0,
-            buttonWidth: button?.width ?? 0,
-          }
-        })()`)
-        assert.ok(layout.width <= 390)
-        assert.ok(layout.emailWidth > 0)
-        assert.ok(layout.passwordWidth > 0)
-        assert.ok(layout.buttonWidth > 0)
-      })
+      await context.test(
+        'narrow viewport keeps login and protected shell usable',
+        async () => {
+          await client.send('Emulation.setDeviceMetricsOverride', {
+            width: 390,
+            height: 844,
+            deviceScaleFactor: 1,
+            mobile: true,
+          })
+          await client.navigate(`${origin}/login`)
+          await client.waitFor(
+            "document.querySelector('#email') instanceof HTMLInputElement",
+          )
+          const loginLayout = await client.evaluate<{
+            width: number
+            emailWidth: number
+            passwordWidth: number
+            buttonWidth: number
+          }>(`(() => {
+            const email = document.querySelector('#email')?.getBoundingClientRect()
+            const passwordInput = document.querySelector('#password')?.getBoundingClientRect()
+            const button = document.querySelector('button[type=submit]')?.getBoundingClientRect()
+            return {
+              width: document.documentElement.scrollWidth,
+              emailWidth: email?.width ?? 0,
+              passwordWidth: passwordInput?.width ?? 0,
+              buttonWidth: button?.width ?? 0,
+            }
+          })()`)
+          assert.ok(loginLayout.width <= 390)
+          assert.ok(loginLayout.emailWidth > 0)
+          assert.ok(loginLayout.passwordWidth > 0)
+          assert.ok(loginLayout.buttonWidth > 0)
+
+          await submitLogin(client, demoIdentities[1].email, password)
+          await client.waitFor(
+            "location.pathname === '/' && document.body.textContent?.includes('Ruang kerja siap digunakan')",
+          )
+          const shellLayout = await client.evaluate<{
+            width: number
+            shellCount: number
+            sidebarWidth: number
+            navigationVisible: boolean
+            mainWidth: number
+          }>(`(() => {
+            const sidebar = document.querySelector('aside')?.getBoundingClientRect()
+            const navigation = document.querySelector('nav[aria-label="Navigasi utama"]')
+            const main = document.querySelector('main#main-content')?.getBoundingClientRect()
+            return {
+              width: document.documentElement.scrollWidth,
+              shellCount: document.querySelectorAll('[data-app-shell=true]').length,
+              sidebarWidth: sidebar?.width ?? 0,
+              navigationVisible: navigation ? getComputedStyle(navigation).display !== 'none' : false,
+              mainWidth: main?.width ?? 0,
+            }
+          })()`)
+          assert.equal(shellLayout.width, 390)
+          assert.equal(shellLayout.shellCount, 1)
+          assert.equal(shellLayout.sidebarWidth, 390)
+          assert.equal(shellLayout.navigationVisible, false)
+          assert.ok(shellLayout.mainWidth > 0 && shellLayout.mainWidth <= 390)
+
+          await client.evaluate(
+            "document.querySelector('summary')?.click(); true",
+          )
+          assert.equal(await client.evaluate(clickButton('Keluar')), true)
+          await client.waitFor("location.pathname === '/login'")
+        },
+      )
     } finally {
       await stopChrome(chrome)
       await stopProcessGroup(app)

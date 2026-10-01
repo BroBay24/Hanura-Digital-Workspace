@@ -9,6 +9,7 @@ export type AuthenticatedPrincipal = {
     email: string
     name: string
   }
+  session: { expiresAt: string }
   authorization: AuthorizationContext
 }
 
@@ -127,6 +128,12 @@ export const createAuthorizationGuards = (
           id: authenticated.user.id,
           email: authenticated.user.email,
           name: authenticated.user.name,
+        },
+        session: {
+          expiresAt:
+            authenticated.session.expiresAt instanceof Date
+              ? authenticated.session.expiresAt.toISOString()
+              : String(authenticated.session.expiresAt),
         },
         authorization,
       },

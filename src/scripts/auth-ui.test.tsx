@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { renderToStaticMarkup } from 'react-dom/server'
+import {
+  AppShell,
+  ShellErrorState,
+  ShellLoadingState,
+} from '#/components/app-shell'
 import { runLogoutWorkflow } from '#/integrations/better-auth/account-menu'
 import {
   AuthPageLayout,
@@ -32,6 +37,45 @@ const authenticatedSession = {
     },
   },
 }
+
+test('application shell exposes one accessible structural layout', () => {
+  const markup = renderToStaticMarkup(
+    <AppShell account={<button type="button">Account</button>}>
+      <section>Child route content</section>
+    </AppShell>,
+  )
+
+  assert.equal((markup.match(/data-app-shell="true"/g) ?? []).length, 1)
+  assert.match(markup, /grid-cols-\[240px_minmax\(0,1fr\)\]/)
+  assert.match(markup, /h-\[72px\]/)
+  assert.match(markup, /<aside/)
+  assert.match(markup, /<nav aria-label="Navigasi utama"/)
+  assert.match(markup, /data-shell-navigation-slot="true"/)
+  assert.match(markup, /data-shell-header-slot="true"/)
+  assert.match(markup, /data-shell-account-slot="true"/)
+  assert.match(markup, /href="#main-content"/)
+  assert.match(markup, /style="color:#ffffff"/)
+  assert.match(markup, /<main id="main-content"/)
+  assert.match(markup, /Child route content/)
+  assert.doesNotMatch(markup, /approval\.|admin\.user_access|loan\.create/)
+})
+
+test('shell loading and failure states do not render protected content', () => {
+  const loading = renderToStaticMarkup(<ShellLoadingState />)
+  assert.match(loading, /aria-busy="true"/)
+  assert.match(loading, /Memuat ruang kerja…/)
+  assert.doesNotMatch(loading, /Sesi aktif|Ruang kerja siap digunakan/)
+
+  const failure = renderToStaticMarkup(
+    <ShellErrorState onRetry={() => undefined} />,
+  )
+  assert.match(failure, /role="alert"/)
+  assert.match(failure, /aria-live="assertive"/)
+  assert.match(failure, /Ruang kerja tidak dapat dimuat/)
+  assert.match(failure, /Sesi tidak dapat diverifikasi/)
+  assert.match(failure, /Coba lagi/)
+  assert.doesNotMatch(failure, /Sesi aktif|Ruang kerja siap digunakan/)
+})
 
 test('login input validation is deterministic and does not mutate password', () => {
   assert.deepEqual(validateLoginInput({ email: '', password: '' }), {

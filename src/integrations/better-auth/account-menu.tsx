@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { LogOut } from 'lucide-react'
 import { useNavigate } from '@tanstack/react-router'
 import { useQueryClient } from '@tanstack/react-query'
-import type { AuthenticatedSession } from '#/lib/session-client'
+import type { AuthorizationSummary, SafeUser } from '#/lib/session-client'
 import { authSessionQueryKey, logoutCurrentSession } from '#/lib/session-client'
 
 export const runLogoutWorkflow = async ({
@@ -30,7 +30,7 @@ const roleLabels: Record<string, string> = {
 export function AccountMenu({
   session,
 }: {
-  session: AuthenticatedSession['data']
+  session: { user: SafeUser; authorization: AuthorizationSummary }
 }) {
   const [isLoggingOut, setIsLoggingOut] = useState(false)
   const [logoutError, setLogoutError] = useState<string>()
