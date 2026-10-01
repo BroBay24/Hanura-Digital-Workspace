@@ -15,6 +15,7 @@ import {
   resolveAuthorizationContext,
   ROLE_CODES,
 } from '#/lib/authorization'
+import { navigationItemsFor } from '#/lib/navigation'
 
 const demoExpectations = [
   {
@@ -160,6 +161,10 @@ test('unknown and no-role users fail closed', async () => {
     roles: [],
     permissions: [],
   })
+  assert.deepEqual(
+    navigationItemsFor(noRole.permissions).map(({ id }) => id),
+    ['dashboard'],
+  )
 })
 
 test('role without permissions resolves safely', async () => {
@@ -221,6 +226,10 @@ test('multiple roles union and deduplicate permissions deterministically', async
       (permission) => permission === PERMISSION_CODES.MEMBER_READ,
     ).length,
     1,
+  )
+  assert.deepEqual(
+    navigationItemsFor(context.permissions).map(({ id }) => id),
+    ['dashboard', 'members', 'approvals', 'reports'],
   )
 })
 

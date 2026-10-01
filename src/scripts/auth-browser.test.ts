@@ -143,6 +143,20 @@ const roleLabels: Record<string, string> = {
   TELLER: 'Teller / Staf',
 }
 
+const roleNavigation: Record<string, Array<string>> = {
+  ADMIN: [
+    'dashboard',
+    'users-access',
+    'activity',
+    'integration-status',
+    'settings',
+  ],
+  CHAIRMAN: ['dashboard', 'members', 'approvals', 'reports'],
+  CREDIT_OFFICER: ['dashboard', 'members', 'loans', 'documents'],
+  MANAGER: ['dashboard', 'members', 'approvals', 'reports'],
+  TELLER: ['dashboard', 'members'],
+}
+
 const launchChrome = async (profile: string) => {
   assert.ok(existsSync(chromePath), `Chrome not found: ${chromePath}`)
   const process = spawn(
@@ -491,6 +505,34 @@ test(
               ),
               true,
             )
+            const navigation = await client.evaluate<{
+              ids: Array<string>
+              disabledIds: Array<string>
+              hrefs: Array<string>
+              activeIds: Array<string>
+            }>(`(() => {
+              const nav = document.querySelector('aside nav[aria-label="Navigasi utama"]')
+              const items = [...(nav?.querySelectorAll('[data-navigation-item]') ?? [])]
+              return {
+                ids: items.map((item) => item.getAttribute('data-navigation-item') ?? ''),
+                disabledIds: items.filter((item) => item.getAttribute('aria-disabled') === 'true').map((item) => item.getAttribute('data-navigation-item') ?? ''),
+                hrefs: [...(nav?.querySelectorAll('a[href]') ?? [])].map((item) => item.getAttribute('href') ?? ''),
+                activeIds: items.filter((item) => item.getAttribute('aria-current') === 'page').map((item) => item.getAttribute('data-navigation-item') ?? ''),
+              }
+            })()`)
+            assert.deepEqual(navigation.ids, roleNavigation[identity.role])
+            assert.deepEqual(
+              navigation.disabledIds,
+              roleNavigation[identity.role].filter((id) => id !== 'dashboard'),
+            )
+            assert.deepEqual(navigation.hrefs, ['/'])
+            assert.deepEqual(navigation.activeIds, ['dashboard'])
+            assert.equal(
+              await client.evaluate(
+                'getComputedStyle(document.querySelector(\'aside [data-navigation-item="dashboard"]\')).color',
+              ),
+              'rgb(255, 255, 255)',
+            )
             const text = await client.evaluate<string>(
               'document.body.innerText',
             )
@@ -719,25 +761,100 @@ test(
             width: number
             shellCount: number
             sidebarWidth: number
-            navigationVisible: boolean
+            triggerVisible: boolean
             mainWidth: number
           }>(`(() => {
             const sidebar = document.querySelector('aside')?.getBoundingClientRect()
-            const navigation = document.querySelector('nav[aria-label="Navigasi utama"]')
+            const trigger = document.querySelector('button[aria-label="Buka navigasi"]')
             const main = document.querySelector('main#main-content')?.getBoundingClientRect()
             return {
               width: document.documentElement.scrollWidth,
               shellCount: document.querySelectorAll('[data-app-shell=true]').length,
               sidebarWidth: sidebar?.width ?? 0,
-              navigationVisible: navigation ? getComputedStyle(navigation).display !== 'none' : false,
+              triggerVisible: trigger ? getComputedStyle(trigger).display !== 'none' : false,
               mainWidth: main?.width ?? 0,
             }
           })()`)
           assert.equal(shellLayout.width, 390)
           assert.equal(shellLayout.shellCount, 1)
-          assert.equal(shellLayout.sidebarWidth, 390)
-          assert.equal(shellLayout.navigationVisible, false)
+          assert.equal(shellLayout.sidebarWidth, 0)
+          assert.equal(shellLayout.triggerVisible, true)
           assert.ok(shellLayout.mainWidth > 0 && shellLayout.mainWidth <= 390)
+
+          assert.equal(
+            await client.evaluate(
+              'document.querySelector(\'button[aria-label="Buka navigasi"]\')?.click(); true',
+            ),
+            true,
+          )
+          await client.waitFor(
+            "Boolean(document.querySelector('[role=dialog]') && document.querySelector('[role=dialog] nav[aria-label=\"Navigasi utama\"]'))",
+          )
+          assert.equal(
+            await client.evaluate(
+              "document.activeElement?.closest('[role=dialog]') !== null",
+            ),
+            true,
+          )
+          await client.send('Input.dispatchKeyEvent', {
+            type: 'keyDown',
+            key: 'Escape',
+            code: 'Escape',
+          })
+          await client.send('Input.dispatchKeyEvent', {
+            type: 'keyUp',
+            key: 'Escape',
+            code: 'Escape',
+          })
+          await client.waitFor("!document.querySelector('[role=dialog]')")
+          assert.equal(
+            await client.evaluate(
+              "document.activeElement?.getAttribute('aria-label')",
+            ),
+            'Buka navigasi',
+          )
+
+          await client.evaluate(
+            'document.querySelector(\'button[aria-label="Buka navigasi"]\')?.click(); true',
+          )
+          await client.waitFor(
+            "Boolean(document.querySelector('[role=dialog]'))",
+          )
+          await client.evaluate(
+            'document.querySelector(\'[role=dialog] [data-navigation-item="dashboard"]\')?.click(); true',
+          )
+          await client.waitFor("!document.querySelector('[role=dialog]')")
+
+          await client.evaluate(
+            'document.querySelector(\'button[aria-label="Buka navigasi"]\')?.click(); true',
+          )
+          await client.waitFor(
+            "Boolean(document.querySelector('[role=dialog]'))",
+          )
+          await client.evaluate(
+            'document.querySelector(\'button[aria-label="Tutup navigasi"]\')?.click(); true',
+          )
+          await client.waitFor("!document.querySelector('[role=dialog]')")
+
+          await client.evaluate(
+            'document.querySelector(\'button[aria-label="Buka navigasi"]\')?.click(); true',
+          )
+          await client.waitFor(
+            "Boolean(document.querySelector('[role=dialog]'))",
+          )
+          await client.send('Emulation.setDeviceMetricsOverride', {
+            width: 1024,
+            height: 768,
+            deviceScaleFactor: 1,
+            mobile: false,
+          })
+          await client.waitFor("!document.querySelector('[role=dialog]')")
+          assert.equal(
+            await client.evaluate(
+              "document.querySelector('aside')?.getBoundingClientRect().width",
+            ),
+            240,
+          )
 
           await client.evaluate(
             "document.querySelector('summary')?.click(); true",

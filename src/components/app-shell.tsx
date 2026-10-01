@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import { AppNavigation, NarrowNavigation } from './app-navigation.tsx'
 
 const ShellBrand = () => (
   <div className="min-w-0">
@@ -16,10 +17,12 @@ export function AppShell({
   account,
   children,
   header,
+  permissions,
 }: {
   account: ReactNode
   children: ReactNode
   header?: ReactNode
+  permissions?: readonly string[]
 }) {
   return (
     <div
@@ -34,25 +37,19 @@ export function AppShell({
         Lewati ke konten utama
       </a>
 
-      <aside className="bg-[#0f172a] px-5 py-5 lg:sticky lg:top-0 lg:h-screen lg:py-7">
+      <aside className="hidden bg-[#0f172a] px-5 py-7 lg:sticky lg:top-0 lg:block lg:h-screen lg:overflow-y-auto">
         <ShellBrand />
-        <nav
-          aria-label="Navigasi utama"
-          className="mt-7 hidden lg:block"
-          data-shell-navigation-slot="true"
-        >
-          <p className="text-[10px] font-medium tracking-[0.16em] text-white/50 uppercase">
-            Navigasi
-          </p>
-          <div className="mt-3 rounded-[10px] border border-dashed border-white/20 px-3 py-3 text-[11px] leading-4 text-white/60">
-            Menu akan tersedia pada tahap navigasi berikutnya.
+        {permissions ? (
+          <div className="mt-7" data-shell-navigation-slot="true">
+            <AppNavigation label="Navigasi utama" permissions={permissions} />
           </div>
-        </nav>
+        ) : null}
       </aside>
 
       <div className="min-w-0">
-        <header className="flex h-[72px] items-center justify-between gap-4 border-b border-[#e2e8f0] bg-white px-5 sm:px-7">
-          <div className="min-w-0" data-shell-header-slot="true">
+        <header className="flex h-[72px] items-center justify-between gap-3 border-b border-[#e2e8f0] bg-white px-5 sm:px-7">
+          {permissions ? <NarrowNavigation permissions={permissions} /> : null}
+          <div className="min-w-0 flex-1" data-shell-header-slot="true">
             {header ?? (
               <>
                 <p className="truncate text-xl leading-[29px] font-semibold">

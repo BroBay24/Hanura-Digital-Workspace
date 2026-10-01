@@ -80,7 +80,10 @@ function ProtectedLayout() {
   if (!sessionQuery.data.data.authenticated) return null
 
   return (
-    <AppShell account={<AccountMenu session={sessionQuery.data.data} />}>
+    <AppShell
+      account={<AccountMenu session={sessionQuery.data.data} />}
+      permissions={sessionQuery.data.data.authorization.permissions}
+    >
       <Outlet />
     </AppShell>
   )

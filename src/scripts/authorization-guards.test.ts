@@ -6,6 +6,7 @@ import { roles, session, user, userRoles } from '#/db/schema'
 import { serverEnv } from '#/env.server'
 import { auth } from '#/lib/auth'
 import { hasPermission } from '#/lib/session-client'
+import { navigationItemsFor } from '#/lib/navigation'
 import {
   createAuthorizationGuards,
   requireAuthenticated,
@@ -352,6 +353,12 @@ test('permission changes are visible on the next check with no cache', async () 
     request(),
   )
   assert.equal(before.ok, false)
+  assert.deepEqual(
+    navigationItemsFor(
+      (await resolveAuthorizationContext(testUserIds[0])).permissions,
+    ).map(({ id }) => id),
+    ['dashboard'],
+  )
 
   await db.insert(userRoles).values({
     userId: testUserIds[0],
@@ -361,12 +368,24 @@ test('permission changes are visible on the next check with no cache', async () 
     PERMISSION_CODES.MEMBER_READ,
   )(request())
   assert.equal(afterGrant.ok, true)
+  assert.deepEqual(
+    navigationItemsFor(
+      (await resolveAuthorizationContext(testUserIds[0])).permissions,
+    ).map(({ id }) => id),
+    ['dashboard', 'members'],
+  )
 
   await db.delete(userRoles).where(eq(userRoles.userId, testUserIds[0]))
   const afterRevoke = await guards.requirePermission(
     PERMISSION_CODES.MEMBER_READ,
   )(request())
   assert.equal(afterRevoke.ok, false)
+  assert.deepEqual(
+    navigationItemsFor(
+      (await resolveAuthorizationContext(testUserIds[0])).permissions,
+    ).map(({ id }) => id),
+    ['dashboard'],
+  )
 })
 
 test('production guard uses authoritative Better Auth session and DB permissions', async () => {
