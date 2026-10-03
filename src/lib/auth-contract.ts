@@ -18,6 +18,7 @@ type ErrorCode =
   | 'FORBIDDEN'
   | 'INTERNAL_ERROR'
   | 'METHOD_NOT_ALLOWED'
+  | 'NOT_FOUND'
   | 'TOO_MANY_REQUESTS'
 
 export const correlationIdFor = (request: Request) => {

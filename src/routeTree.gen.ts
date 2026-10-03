@@ -14,9 +14,11 @@ import { Route as LoginRouteImport } from './routes/login'
 import { Route as AuthenticatedIndexRouteImport } from './routes/_authenticated.index'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as ApiV1DashboardRouteImport } from './routes/api/v1/dashboard'
+import { Route as ApiV1MembersRouteImport } from './routes/api/v1/members'
 import { Route as ApiV1AuthLoginRouteImport } from './routes/api/v1/auth/login'
 import { Route as ApiV1AuthLogoutRouteImport } from './routes/api/v1/auth/logout'
 import { Route as ApiV1AuthSessionRouteImport } from './routes/api/v1/auth/session'
+import { Route as ApiV1MembersIdRouteImport } from './routes/api/v1/members/$id'
 
 const AuthenticatedRoute = AuthenticatedRouteImport.update({
   id: '/_authenticated',
@@ -42,6 +44,11 @@ const ApiV1DashboardRoute = ApiV1DashboardRouteImport.update({
   path: '/api/v1/dashboard',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiV1MembersRoute = ApiV1MembersRouteImport.update({
+  id: '/api/v1/members',
+  path: '/api/v1/members',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiV1AuthLoginRoute = ApiV1AuthLoginRouteImport.update({
   id: '/api/v1/auth/login',
   path: '/api/v1/auth/login',
@@ -57,24 +64,33 @@ const ApiV1AuthSessionRoute = ApiV1AuthSessionRouteImport.update({
   path: '/api/v1/auth/session',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiV1MembersIdRoute = ApiV1MembersIdRouteImport.update({
+  id: '/$id',
+  path: '/$id',
+  getParentRoute: () => ApiV1MembersRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof AuthenticatedIndexRoute
   '/login': typeof LoginRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/v1/dashboard': typeof ApiV1DashboardRoute
+  '/api/v1/members': typeof ApiV1MembersRouteWithChildren
   '/api/v1/auth/login': typeof ApiV1AuthLoginRoute
   '/api/v1/auth/logout': typeof ApiV1AuthLogoutRoute
   '/api/v1/auth/session': typeof ApiV1AuthSessionRoute
+  '/api/v1/members/$id': typeof ApiV1MembersIdRoute
 }
 export interface FileRoutesByTo {
   '/login': typeof LoginRoute
   '/': typeof AuthenticatedIndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/v1/dashboard': typeof ApiV1DashboardRoute
+  '/api/v1/members': typeof ApiV1MembersRouteWithChildren
   '/api/v1/auth/login': typeof ApiV1AuthLoginRoute
   '/api/v1/auth/logout': typeof ApiV1AuthLogoutRoute
   '/api/v1/auth/session': typeof ApiV1AuthSessionRoute
+  '/api/v1/members/$id': typeof ApiV1MembersIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -83,9 +99,11 @@ export interface FileRoutesById {
   '/_authenticated/': typeof AuthenticatedIndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/v1/dashboard': typeof ApiV1DashboardRoute
+  '/api/v1/members': typeof ApiV1MembersRouteWithChildren
   '/api/v1/auth/login': typeof ApiV1AuthLoginRoute
   '/api/v1/auth/logout': typeof ApiV1AuthLogoutRoute
   '/api/v1/auth/session': typeof ApiV1AuthSessionRoute
+  '/api/v1/members/$id': typeof ApiV1MembersIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -94,18 +112,22 @@ export interface FileRouteTypes {
     | '/login'
     | '/api/auth/$'
     | '/api/v1/dashboard'
+    | '/api/v1/members'
     | '/api/v1/auth/login'
     | '/api/v1/auth/logout'
     | '/api/v1/auth/session'
+    | '/api/v1/members/$id'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/login'
     | '/'
     | '/api/auth/$'
     | '/api/v1/dashboard'
+    | '/api/v1/members'
     | '/api/v1/auth/login'
     | '/api/v1/auth/logout'
     | '/api/v1/auth/session'
+    | '/api/v1/members/$id'
   id:
     | '__root__'
     | '/_authenticated'
@@ -113,9 +135,11 @@ export interface FileRouteTypes {
     | '/_authenticated/'
     | '/api/auth/$'
     | '/api/v1/dashboard'
+    | '/api/v1/members'
     | '/api/v1/auth/login'
     | '/api/v1/auth/logout'
     | '/api/v1/auth/session'
+    | '/api/v1/members/$id'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -123,6 +147,7 @@ export interface RootRouteChildren {
   LoginRoute: typeof LoginRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
   ApiV1DashboardRoute: typeof ApiV1DashboardRoute
+  ApiV1MembersRoute: typeof ApiV1MembersRouteWithChildren
   ApiV1AuthLoginRoute: typeof ApiV1AuthLoginRoute
   ApiV1AuthLogoutRoute: typeof ApiV1AuthLogoutRoute
   ApiV1AuthSessionRoute: typeof ApiV1AuthSessionRoute
@@ -165,6 +190,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiV1DashboardRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/v1/members': {
+      id: '/api/v1/members'
+      path: '/api/v1/members'
+      fullPath: '/api/v1/members'
+      preLoaderRoute: typeof ApiV1MembersRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/v1/auth/login': {
       id: '/api/v1/auth/login'
       path: '/api/v1/auth/login'
@@ -186,6 +218,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiV1AuthSessionRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/v1/members/$id': {
+      id: '/api/v1/members/$id'
+      path: '/$id'
+      fullPath: '/api/v1/members/$id'
+      preLoaderRoute: typeof ApiV1MembersIdRouteImport
+      parentRoute: typeof ApiV1MembersRoute
+    }
   }
 }
 
@@ -201,11 +240,24 @@ const AuthenticatedRouteWithChildren = AuthenticatedRoute._addFileChildren(
   AuthenticatedRouteChildren,
 )
 
+interface ApiV1MembersRouteChildren {
+  ApiV1MembersIdRoute: typeof ApiV1MembersIdRoute
+}
+
+const ApiV1MembersRouteChildren: ApiV1MembersRouteChildren = {
+  ApiV1MembersIdRoute: ApiV1MembersIdRoute,
+}
+
+const ApiV1MembersRouteWithChildren = ApiV1MembersRoute._addFileChildren(
+  ApiV1MembersRouteChildren,
+)
+
 const rootRouteChildren: RootRouteChildren = {
   AuthenticatedRoute: AuthenticatedRouteWithChildren,
   LoginRoute: LoginRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
   ApiV1DashboardRoute: ApiV1DashboardRoute,
+  ApiV1MembersRoute: ApiV1MembersRouteWithChildren,
   ApiV1AuthLoginRoute: ApiV1AuthLoginRoute,
   ApiV1AuthLogoutRoute: ApiV1AuthLogoutRoute,
   ApiV1AuthSessionRoute: ApiV1AuthSessionRoute,
