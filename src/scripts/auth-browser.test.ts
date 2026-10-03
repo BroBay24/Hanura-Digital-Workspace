@@ -7,8 +7,9 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { eq, inArray } from 'drizzle-orm'
 import { db } from '#/db'
-import { session } from '#/db/schema'
+import { roles, session, user, userRoles } from '#/db/schema'
 import { serverEnv } from '#/env.server'
+import { auth } from '#/lib/auth'
 import { demoIdentities } from './provision-demo-auth.ts'
 
 type CdpMessage = {
@@ -194,6 +195,50 @@ const roleNavigation: Record<string, Array<string>> = {
   TELLER: ['dashboard', 'members'],
 }
 
+const temporaryIdentities = {
+  noRole: {
+    email: 'no-role.integration@hanura.local',
+    name: 'Integration No Role',
+  },
+  multiRole: {
+    email: 'multi-role.integration@hanura.local',
+    name: 'Integration Multi Role',
+  },
+} as const
+
+const temporaryEmails = Object.values(temporaryIdentities).map(
+  ({ email }) => email,
+)
+
+const setupTemporaryIdentities = async () => {
+  await db.delete(user).where(inArray(user.email, temporaryEmails))
+  await auth.api.signUpEmail({
+    body: { ...temporaryIdentities.noRole, password },
+  })
+  const multiRole = await auth.api.signUpEmail({
+    body: { ...temporaryIdentities.multiRole, password },
+  })
+  const assignedRoles = await db
+    .select({ id: roles.id, code: roles.code })
+    .from(roles)
+    .where(inArray(roles.code, ['CREDIT_OFFICER', 'MANAGER', 'TELLER']))
+  const roleByCode = new Map(assignedRoles.map((role) => [role.code, role.id]))
+  const creditOfficerRole = roleByCode.get('CREDIT_OFFICER')
+  const managerRole = roleByCode.get('MANAGER')
+  const tellerRole = roleByCode.get('TELLER')
+  assert.ok(creditOfficerRole)
+  assert.ok(managerRole)
+  assert.ok(tellerRole)
+  await db.insert(userRoles).values([
+    { userId: multiRole.user.id, roleId: creditOfficerRole },
+    { userId: multiRole.user.id, roleId: managerRole },
+  ])
+  return {
+    multiRoleUserId: multiRole.user.id,
+    tellerRoleId: tellerRole,
+  }
+}
+
 const launchChrome = async (profile: string) => {
   assert.ok(existsSync(chromePath), `Chrome not found: ${chromePath}`)
   const process = spawn(
@@ -345,16 +390,20 @@ const unauthenticatedBody = {
 
 test(
   'browser authentication and session UX integrates with the application contract',
-  { timeout: 120_000 },
+  { timeout: 180_000 },
   async (context) => {
     const profile = await mkdtemp(join(tmpdir(), 'hdw-auth-browser-'))
-    const baselineSessionIds = new Set(
-      (await db.select({ id: session.id }).from(session)).map(({ id }) => id),
-    )
+    let baselineSessionIds = new Set<string>()
+    let temporaryFixture:
+      Awaited<ReturnType<typeof setupTemporaryIdentities>> | undefined
     let app: ReturnType<typeof spawn> | undefined
     let chrome: Awaited<ReturnType<typeof launchChrome>> | undefined
 
     try {
+      temporaryFixture = await setupTemporaryIdentities()
+      baselineSessionIds = new Set(
+        (await db.select({ id: session.id }).from(session)).map(({ id }) => id),
+      )
       app = await launchApp()
       chrome = await launchChrome(profile)
       const { client } = chrome
@@ -547,7 +596,7 @@ test(
                   sections: Array<{
                     id: string
                     source: { financialSourceOfTruth: boolean }
-                    metrics: Array<{ unit: string }>
+                    metrics: Array<{ key: string; unit: string; value: number }>
                   }>
                 }
               }
@@ -574,12 +623,14 @@ test(
             )
             const renderedDashboard = await client.evaluate<{
               sectionIds: Array<string>
+              metricKeys: Array<string>
               metricValues: Array<string>
               headingCount: number
               horizontalOverflow: boolean
               text: string
             }>(`(() => ({
               sectionIds: [...document.querySelectorAll('[data-dashboard-section]')].map((item) => item.getAttribute('data-dashboard-section') ?? ''),
+              metricKeys: [...document.querySelectorAll('[data-dashboard-metric]')].map((item) => item.getAttribute('data-dashboard-metric') ?? ''),
               metricValues: [...document.querySelectorAll('[data-dashboard-metric] dd')].map((item) => item.textContent?.trim() ?? ''),
               headingCount: document.querySelectorAll('h1').length,
               horizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
@@ -589,7 +640,18 @@ test(
               renderedDashboard.sectionIds,
               roleDashboardSections[identity.role],
             )
-            assert.equal(renderedDashboard.metricValues.length > 0, true)
+            assert.deepEqual(
+              renderedDashboard.metricKeys,
+              dashboard.body.data.sections.flatMap(({ metrics }) =>
+                metrics.map(({ key }) => key),
+              ),
+            )
+            assert.deepEqual(
+              renderedDashboard.metricValues,
+              dashboard.body.data.sections.flatMap(({ metrics }) =>
+                metrics.map(({ value }) => value.toLocaleString('id-ID')),
+              ),
+            )
             assert.equal(renderedDashboard.headingCount, 1)
             assert.equal(renderedDashboard.horizontalOverflow, false)
             assert.doesNotMatch(
@@ -707,6 +769,23 @@ test(
                 origin.startsWith('https://'),
             )
 
+            await client.navigate(`${origin}/`)
+            await client.waitFor(
+              "location.pathname === '/' && Boolean(document.querySelector('[data-dashboard-page=true]'))",
+            )
+            assert.deepEqual(
+              await client.evaluate<Array<string>>(
+                "[...document.querySelectorAll('[data-dashboard-section]')].map((item) => item.getAttribute('data-dashboard-section') ?? '')",
+              ),
+              roleDashboardSections[identity.role],
+            )
+            assert.deepEqual(
+              await client.evaluate<Array<string>>(
+                "[...document.querySelectorAll('aside [data-navigation-item]')].map((item) => item.getAttribute('data-navigation-item') ?? '')",
+              ),
+              roleNavigation[identity.role],
+            )
+
             assert.equal(
               await client.evaluate(
                 "document.querySelector('summary')?.click(); true",
@@ -737,6 +816,195 @@ test(
           },
         )
       }
+
+      await context.test(
+        'dashboard cache is isolated across ADMIN to TELLER and CHAIRMAN to CREDIT_OFFICER switches',
+        async () => {
+          const switches = [
+            {
+              from: demoIdentities[4],
+              to: demoIdentities[3],
+              forbidden: 'access-summary',
+            },
+            {
+              from: demoIdentities[0],
+              to: demoIdentities[2],
+              forbidden: 'chairman-approval-queue',
+            },
+          ]
+
+          for (const switchCase of switches) {
+            await client.send('Network.clearBrowserCookies')
+            await client.navigate(`${origin}/login`)
+            await submitLogin(client, switchCase.from.email, password)
+            await client.waitFor(
+              "location.pathname === '/' && Boolean(document.querySelector('[data-dashboard-page=true]'))",
+            )
+            assert.deepEqual(
+              await client.evaluate<Array<string>>(
+                "[...document.querySelectorAll('[data-dashboard-section]')].map((item) => item.getAttribute('data-dashboard-section') ?? '')",
+              ),
+              roleDashboardSections[switchCase.from.role],
+            )
+            await client.evaluate(
+              "document.querySelector('summary')?.click(); true",
+            )
+            assert.equal(await client.evaluate(clickButton('Keluar')), true)
+            await client.waitFor("location.pathname === '/login'")
+
+            await client.send('Fetch.enable', {
+              patterns: [
+                { urlPattern: '*/api/v1/dashboard', requestStage: 'Request' },
+              ],
+            })
+            const pausedDashboard = client.once<{ requestId: string }>(
+              'Fetch.requestPaused',
+            )
+            await submitLogin(client, switchCase.to.email, password)
+            const paused = await pausedDashboard
+            await client.waitFor(
+              "location.pathname === '/' && Boolean(document.querySelector('[data-dashboard-loading=true]'))",
+            )
+            assert.equal(
+              await client.evaluate(
+                `document.querySelector('[data-dashboard-section=${switchCase.forbidden}]') === null`,
+              ),
+              true,
+            )
+            assert.equal(
+              await client.evaluate(
+                "document.querySelectorAll('[data-dashboard-section]').length",
+              ),
+              0,
+            )
+            await client.send('Fetch.continueRequest', {
+              requestId: paused.requestId,
+            })
+            await client.send('Fetch.disable')
+            await client.waitFor(
+              "Boolean(document.querySelector('[data-dashboard-page=true]'))",
+            )
+            assert.deepEqual(
+              await client.evaluate<Array<string>>(
+                "[...document.querySelectorAll('[data-dashboard-section]')].map((item) => item.getAttribute('data-dashboard-section') ?? '')",
+              ),
+              roleDashboardSections[switchCase.to.role],
+            )
+            await client.evaluate(
+              "document.querySelector('summary')?.click(); true",
+            )
+            assert.equal(await client.evaluate(clickButton('Keluar')), true)
+            await client.waitFor("location.pathname === '/login'")
+          }
+        },
+      )
+
+      await context.test(
+        'temporary missing-role and multi-role users compose safely and refresh DB permissions',
+        async () => {
+          assert.ok(temporaryFixture)
+          await client.send('Network.clearBrowserCookies')
+          await client.navigate(`${origin}/login`)
+          await submitLogin(client, temporaryIdentities.noRole.email, password)
+          await client.waitFor(
+            "location.pathname === '/' && Boolean(document.querySelector('[data-dashboard-empty=true]'))",
+          )
+          assert.deepEqual(
+            await client.evaluate<Array<string>>(
+              "[...document.querySelectorAll('aside [data-navigation-item]')].map((item) => item.getAttribute('data-navigation-item') ?? '')",
+            ),
+            ['dashboard'],
+          )
+          assert.equal(
+            await client.evaluate(
+              "document.querySelectorAll('[data-dashboard-section]').length",
+            ),
+            0,
+          )
+          assert.equal(
+            await client.evaluate(
+              "document.querySelector('.account-menu')?.textContent?.includes('Pengguna')",
+            ),
+            true,
+          )
+          await client.evaluate(
+            "document.querySelector('summary')?.click(); true",
+          )
+          assert.equal(await client.evaluate(clickButton('Keluar')), true)
+          await client.waitFor("location.pathname === '/login'")
+
+          await submitLogin(
+            client,
+            temporaryIdentities.multiRole.email,
+            password,
+          )
+          await client.waitFor(
+            "location.pathname === '/' && Boolean(document.querySelector('[data-dashboard-page=true]'))",
+          )
+          assert.deepEqual(
+            await client.evaluate<Array<string>>(
+              "[...document.querySelectorAll('[data-dashboard-section]')].map((item) => item.getAttribute('data-dashboard-section') ?? '')",
+            ),
+            [
+              'member-overview',
+              'member-snapshot-health',
+              'loan-workflow',
+              'document-workload',
+              'credit-review-workload',
+              'manager-approval-queue',
+              'operational-report',
+            ],
+          )
+          assert.deepEqual(
+            await client.evaluate<Array<string>>(
+              "[...document.querySelectorAll('aside [data-navigation-item]')].map((item) => item.getAttribute('data-navigation-item') ?? '')",
+            ),
+            [
+              'dashboard',
+              'members',
+              'loans',
+              'approvals',
+              'documents',
+              'reports',
+            ],
+          )
+          assert.equal(
+            await client.evaluate(
+              "new Set([...document.querySelectorAll('[data-dashboard-section]')].map((item) => item.getAttribute('data-dashboard-section'))).size === document.querySelectorAll('[data-dashboard-section]').length",
+            ),
+            true,
+          )
+
+          await db
+            .delete(userRoles)
+            .where(eq(userRoles.userId, temporaryFixture.multiRoleUserId))
+          await db.insert(userRoles).values({
+            userId: temporaryFixture.multiRoleUserId,
+            roleId: temporaryFixture.tellerRoleId,
+          })
+          await client.navigate(`${origin}/`)
+          await client.waitFor(
+            "location.pathname === '/' && Boolean(document.querySelector('[data-dashboard-page=true]'))",
+          )
+          assert.deepEqual(
+            await client.evaluate<Array<string>>(
+              "[...document.querySelectorAll('[data-dashboard-section]')].map((item) => item.getAttribute('data-dashboard-section') ?? '')",
+            ),
+            roleDashboardSections.TELLER,
+          )
+          assert.deepEqual(
+            await client.evaluate<Array<string>>(
+              "[...document.querySelectorAll('aside [data-navigation-item]')].map((item) => item.getAttribute('data-navigation-item') ?? '')",
+            ),
+            roleNavigation.TELLER,
+          )
+          await client.evaluate(
+            "document.querySelector('summary')?.click(); true",
+          )
+          assert.equal(await client.evaluate(clickButton('Keluar')), true)
+          await client.waitFor("location.pathname === '/login'")
+        },
+      )
 
       await context.test(
         'dashboard loading, error, retry, empty, unavailable, and degraded states remain distinct',
@@ -896,6 +1164,67 @@ test(
       )
 
       await context.test(
+        'dashboard network failure preserves authenticated shell and retries successfully',
+        async () => {
+          await client.send('Network.clearBrowserCookies')
+          const loginStatus = await client.evaluate<number>(
+            `fetch('/api/v1/auth/login', {
+              method: 'POST',
+              credentials: 'include',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ email: ${JSON.stringify(demoIdentities[1].email)}, password: ${JSON.stringify(password)} }),
+            }).then((response) => response.status)`,
+          )
+          assert.equal(loginStatus, 200)
+          await client.send('Fetch.enable', {
+            patterns: [
+              { urlPattern: '*/api/v1/dashboard', requestStage: 'Request' },
+            ],
+          })
+          const failedRequest = client.once<{ requestId: string }>(
+            'Fetch.requestPaused',
+          )
+          await client.navigate(`${origin}/`)
+          const request = await failedRequest
+          await client.send('Fetch.failRequest', {
+            requestId: request.requestId,
+            errorReason: 'InternetDisconnected',
+          })
+          await client.send('Fetch.disable')
+          await client.waitFor(
+            "Boolean(document.querySelector('[data-dashboard-error=true][role=alert]'))",
+          )
+          assert.equal(
+            await client.evaluate(
+              "Boolean(document.querySelector('[data-app-shell=true]') && document.querySelector('nav[aria-label=\"Navigasi utama\"]') && document.querySelector('.account-menu'))",
+            ),
+            true,
+          )
+          assert.equal(
+            await client.evaluate(
+              "fetch('/api/v1/auth/session').then((response) => response.json()).then((body) => body.data.authenticated)",
+            ),
+            true,
+          )
+          assert.equal(await client.evaluate(clickButton('Coba lagi')), true)
+          await client.waitFor(
+            "Boolean(document.querySelector('[data-dashboard-page=true]'))",
+          )
+          assert.deepEqual(
+            await client.evaluate<Array<string>>(
+              "[...document.querySelectorAll('[data-dashboard-section]')].map((item) => item.getAttribute('data-dashboard-section') ?? '')",
+            ),
+            roleDashboardSections.MANAGER,
+          )
+          await client.evaluate(
+            "document.querySelector('summary')?.click(); true",
+          )
+          assert.equal(await client.evaluate(clickButton('Keluar')), true)
+          await client.waitFor("location.pathname === '/login'")
+        },
+      )
+
+      await context.test(
         'loading, authenticated redirect, and account data are safe',
         async () => {
           await client.send('Network.clearBrowserCookies')
@@ -989,7 +1318,42 @@ test(
           )
 
           await client.evaluate(
-            "document.querySelector('summary')?.click(); true",
+            "document.querySelector('summary')?.focus(); true",
+          )
+          await client.send('Input.dispatchKeyEvent', {
+            type: 'rawKeyDown',
+            key: ' ',
+            code: 'Space',
+            windowsVirtualKeyCode: 32,
+          })
+          await client.send('Input.dispatchKeyEvent', {
+            type: 'keyUp',
+            key: ' ',
+            code: 'Space',
+            windowsVirtualKeyCode: 32,
+          })
+          await client.waitFor(
+            "document.querySelector('details.account-menu')?.hasAttribute('open') === true",
+          )
+          assert.equal(
+            await client.evaluate('document.activeElement?.tagName'),
+            'SUMMARY',
+          )
+          await client.send('Input.dispatchKeyEvent', {
+            type: 'keyDown',
+            key: 'Tab',
+            code: 'Tab',
+          })
+          await client.send('Input.dispatchKeyEvent', {
+            type: 'keyUp',
+            key: 'Tab',
+            code: 'Tab',
+          })
+          assert.equal(
+            await client.evaluate(
+              "document.activeElement?.textContent?.trim() === 'Keluar'",
+            ),
+            true,
           )
           const text = await client.evaluate<string>('document.body.innerText')
           assert.match(text, /Demo Manager/)
@@ -1215,6 +1579,7 @@ test(
       if (createdSessionIds.length > 0) {
         await db.delete(session).where(inArray(session.id, createdSessionIds))
       }
+      await db.delete(user).where(inArray(user.email, temporaryEmails))
       await db.$client.end()
       await rm(profile, { recursive: true, force: true, maxRetries: 5 })
     }
