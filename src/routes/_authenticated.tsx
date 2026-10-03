@@ -7,6 +7,7 @@ import {
   useRouter,
 } from '@tanstack/react-router'
 import { AccountMenu } from '#/integrations/better-auth/account-menu'
+import { useAppHeaderContext } from '#/components/app-header'
 import {
   AppShell,
   ShellErrorState,
@@ -46,19 +47,29 @@ export const Route = createFileRoute('/_authenticated')({
     } satisfies AuthSession
     context.queryClient.setQueryData(authSessionQueryKey, session)
   },
-  pendingComponent: ShellLoadingState,
+  pendingComponent: ProtectedShellLoading,
   errorComponent: ProtectedShellError,
   component: ProtectedLayout,
 })
 
+function ProtectedShellLoading() {
+  return <ShellLoadingState headerContext={useAppHeaderContext()} />
+}
+
 function ProtectedShellError() {
   const router = useRouter()
-  return <ShellErrorState onRetry={() => void router.invalidate()} />
+  return (
+    <ShellErrorState
+      headerContext={useAppHeaderContext()}
+      onRetry={() => void router.invalidate()}
+    />
+  )
 }
 
 function ProtectedLayout() {
   const navigate = useNavigate()
   const sessionQuery = useAuthSession()
+  const headerContext = useAppHeaderContext()
 
   useEffect(() => {
     if (sessionQuery.data?.data.authenticated) return
@@ -71,10 +82,17 @@ function ProtectedLayout() {
     }
   }, [navigate, sessionQuery.data])
 
-  if (sessionQuery.isPending) return <ShellLoadingState />
+  if (sessionQuery.isPending) {
+    return <ShellLoadingState headerContext={headerContext} />
+  }
 
   if (sessionQuery.isError) {
-    return <ShellErrorState onRetry={() => void sessionQuery.refetch()} />
+    return (
+      <ShellErrorState
+        headerContext={headerContext}
+        onRetry={() => void sessionQuery.refetch()}
+      />
+    )
   }
 
   if (!sessionQuery.data.data.authenticated) return null
@@ -82,6 +100,7 @@ function ProtectedLayout() {
   return (
     <AppShell
       account={<AccountMenu session={sessionQuery.data.data} />}
+      headerContext={headerContext}
       permissions={sessionQuery.data.data.authorization.permissions}
     >
       <Outlet />

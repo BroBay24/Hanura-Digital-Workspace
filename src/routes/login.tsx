@@ -4,6 +4,7 @@ import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { useQueryClient } from '@tanstack/react-query'
 import { z } from 'zod'
 import type { LoginFieldErrors } from '#/integrations/better-auth/login-view'
+import { dashboardQueryKey } from '#/lib/dashboard-client'
 import {
   LoginView,
   SessionExpiredView,
@@ -80,6 +81,7 @@ function LoginPage() {
 
     try {
       await loginWithPassword(parsed.data)
+      queryClient.removeQueries({ queryKey: dashboardQueryKey })
       const nextSession = await queryClient.fetchQuery({
         queryKey: authSessionQueryKey,
         queryFn: () => fetchAuthSession(),

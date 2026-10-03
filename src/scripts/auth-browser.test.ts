@@ -143,6 +143,43 @@ const roleLabels: Record<string, string> = {
   TELLER: 'Teller / Staf',
 }
 
+const roleNames: Record<string, string> = {
+  ADMIN: 'Demo Administrator',
+  CHAIRMAN: 'Demo Ketua',
+  CREDIT_OFFICER: 'Demo Petugas Kredit',
+  MANAGER: 'Demo Manager',
+  TELLER: 'Demo Teller',
+}
+
+const roleDashboardSections: Record<string, Array<string>> = {
+  ADMIN: [
+    'access-summary',
+    'audit-summary',
+    'integration-status',
+    'settings-summary',
+  ],
+  CHAIRMAN: [
+    'member-overview',
+    'member-snapshot-health',
+    'chairman-approval-queue',
+    'operational-report',
+  ],
+  CREDIT_OFFICER: [
+    'member-overview',
+    'member-snapshot-health',
+    'loan-workflow',
+    'document-workload',
+    'credit-review-workload',
+  ],
+  MANAGER: [
+    'member-overview',
+    'member-snapshot-health',
+    'manager-approval-queue',
+    'operational-report',
+  ],
+  TELLER: ['member-overview', 'member-snapshot-health'],
+}
+
 const roleNavigation: Record<string, Array<string>> = {
   ADMIN: [
     'dashboard',
@@ -361,6 +398,10 @@ test(
           )
           const text = await client.evaluate<string>('document.body.innerText')
           assert.doesNotMatch(text, /Sesi aktif|Ruang kerja siap digunakan/)
+          const dashboardStatus = await client.evaluate<number>(
+            "fetch('/api/v1/dashboard').then((response) => response.status)",
+          )
+          assert.equal(dashboardStatus, 401)
         },
       )
 
@@ -379,7 +420,7 @@ test(
           assert.equal(loginStatus, 200)
           await client.navigate(`${origin}/`)
           await client.waitFor(
-            "location.pathname === '/' && document.body.textContent?.includes('Ruang kerja siap digunakan')",
+            "location.pathname === '/' && Boolean(document.querySelector('[data-dashboard-page=true]'))",
           )
 
           await client.send('Fetch.enable', {
@@ -418,9 +459,15 @@ test(
           )
           assert.equal(
             await client.evaluate(
-              "document.body.textContent?.includes('Ruang kerja siap digunakan')",
+              "Boolean(document.querySelector('[data-dashboard-page=true]'))",
             ),
             false,
+          )
+          assert.equal(
+            await client.evaluate(
+              "document.querySelector('header[data-app-header=true] h1')?.textContent?.trim()",
+            ),
+            'Dasbor',
           )
 
           const logoutStatus = await client.evaluate<number>(
@@ -475,7 +522,7 @@ test(
             await client.navigate(`${origin}/login`)
             await submitLogin(client, identity.email, password)
             await client.waitFor(
-              "location.pathname === '/' && document.body.textContent?.includes('Sesi aktif')",
+              "location.pathname === '/' && Boolean(document.querySelector('[data-dashboard-page=true]'))",
             )
 
             const apiSession = await client.evaluate<{
@@ -492,6 +539,68 @@ test(
             assert.deepEqual(apiSession.data.authorization.roles, [
               identity.role,
             ])
+            const dashboard = await client.evaluate<{
+              status: number
+              body: {
+                data: {
+                  context: { degraded: boolean; degradedSources: Array<string> }
+                  sections: Array<{
+                    id: string
+                    source: { financialSourceOfTruth: boolean }
+                    metrics: Array<{ unit: string }>
+                  }>
+                }
+              }
+            }>(`fetch('/api/v1/dashboard?role=ADMIN&permission=*', {
+              headers: { 'x-role': 'ADMIN', 'x-permission': '*' },
+            }).then(async (response) => ({ status: response.status, body: await response.json() }))`)
+            assert.equal(dashboard.status, 200)
+            assert.deepEqual(
+              dashboard.body.data.sections.map(({ id }) => id),
+              roleDashboardSections[identity.role],
+            )
+            assert.equal(dashboard.body.data.context.degraded, false)
+            assert.deepEqual(dashboard.body.data.context.degradedSources, [])
+            for (const section of dashboard.body.data.sections) {
+              assert.equal(section.source.financialSourceOfTruth, false)
+              assert.equal(
+                section.metrics.every(({ unit }) => unit === 'count'),
+                true,
+              )
+            }
+            assert.doesNotMatch(
+              JSON.stringify(dashboard.body),
+              /requestedAmount|outstanding|portfolio balance|sessionToken|secret/i,
+            )
+            const renderedDashboard = await client.evaluate<{
+              sectionIds: Array<string>
+              metricValues: Array<string>
+              headingCount: number
+              horizontalOverflow: boolean
+              text: string
+            }>(`(() => ({
+              sectionIds: [...document.querySelectorAll('[data-dashboard-section]')].map((item) => item.getAttribute('data-dashboard-section') ?? ''),
+              metricValues: [...document.querySelectorAll('[data-dashboard-metric] dd')].map((item) => item.textContent?.trim() ?? ''),
+              headingCount: document.querySelectorAll('h1').length,
+              horizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+              text: document.querySelector('[data-dashboard-page=true]')?.textContent ?? '',
+            }))()`)
+            assert.deepEqual(
+              renderedDashboard.sectionIds,
+              roleDashboardSections[identity.role],
+            )
+            assert.equal(renderedDashboard.metricValues.length > 0, true)
+            assert.equal(renderedDashboard.headingCount, 1)
+            assert.equal(renderedDashboard.horizontalOverflow, false)
+            assert.doesNotMatch(
+              renderedDashboard.text,
+              /saldo resmi|portfolio resmi|outstanding resmi|performing loans|assigned to you|hari ini/i,
+            )
+            const screenshot = await client.send<{ data: string }>(
+              'Page.captureScreenshot',
+              { format: 'png', fromSurface: true },
+            )
+            assert.ok(screenshot.data.length > 1000)
 
             assert.equal(
               await client.evaluate(
@@ -501,10 +610,36 @@ test(
             )
             assert.equal(
               await client.evaluate(
-                "Boolean(document.querySelector('nav[aria-label=\"Navigasi utama\"]') && document.querySelector('main#main-content')?.textContent?.includes('Ruang kerja siap digunakan'))",
+                "Boolean(document.querySelector('nav[aria-label=\"Navigasi utama\"]') && document.querySelector('main#main-content [data-dashboard-page=true]'))",
               ),
               true,
             )
+            const header = await client.evaluate<{
+              count: number
+              height: number
+              title: string
+              subtitle: string
+              headingCount: number
+              accountLabel: string | null
+            }>(`(() => {
+              const header = document.querySelector('header[data-app-header=true]')
+              return {
+                count: document.querySelectorAll('header[data-app-header=true]').length,
+                height: header?.getBoundingClientRect().height ?? 0,
+                title: header?.querySelector('h1')?.textContent?.trim() ?? '',
+                subtitle: header?.querySelector('h1 + p')?.textContent?.trim() ?? '',
+                headingCount: document.querySelectorAll('h1').length,
+                accountLabel: header?.querySelector('summary')?.getAttribute('aria-label') ?? null,
+              }
+            })()`)
+            assert.deepEqual(header, {
+              count: 1,
+              height: 72,
+              title: 'Dasbor',
+              subtitle: 'Ruang Kerja Digital Hanura',
+              headingCount: 1,
+              accountLabel: `Buka menu akun untuk ${roleNames[identity.role]}`,
+            })
             const navigation = await client.evaluate<{
               ids: Array<string>
               disabledIds: Array<string>
@@ -578,6 +713,19 @@ test(
               ),
               true,
             )
+            const accountText = await client.evaluate<string>(
+              "document.querySelector('.account-menu')?.innerText ?? ''",
+            )
+            assert.match(accountText, new RegExp(roleNames[identity.role]))
+            assert.match(
+              accountText,
+              new RegExp(identity.email.replace('.', '\\.')),
+            )
+            assert.match(accountText, new RegExp(roleLabels[identity.role]))
+            assert.doesNotMatch(
+              accountText,
+              /demo-user-|approval\.|admin\.user_access|session_token/,
+            )
             assert.equal(await client.evaluate(clickButton('Keluar')), true)
             await client.waitFor("location.pathname === '/login'")
             assert.deepEqual(
@@ -591,17 +739,174 @@ test(
       }
 
       await context.test(
+        'dashboard loading, error, retry, empty, unavailable, and degraded states remain distinct',
+        async () => {
+          await client.send('Network.clearBrowserCookies')
+          const loginStatus = await client.evaluate<number>(
+            `fetch('/api/v1/auth/login', {
+              method: 'POST',
+              credentials: 'include',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ email: ${JSON.stringify(demoIdentities[1].email)}, password: ${JSON.stringify(password)} }),
+            }).then((response) => response.status)`,
+          )
+          assert.equal(loginStatus, 200)
+
+          await client.send('Fetch.enable', {
+            patterns: [
+              { urlPattern: '*/api/v1/dashboard', requestStage: 'Request' },
+            ],
+          })
+          const failedRequest = client.once<{ requestId: string }>(
+            'Fetch.requestPaused',
+          )
+          await client.navigate(`${origin}/`)
+          await client.waitFor(
+            "Boolean(document.querySelector('[data-dashboard-loading=true]'))",
+          )
+          assert.equal(
+            await client.evaluate(
+              "document.querySelectorAll('[data-dashboard-metric]').length",
+            ),
+            0,
+          )
+          const failure = await failedRequest
+          await client.send('Fetch.fulfillRequest', {
+            requestId: failure.requestId,
+            responseCode: 500,
+            responseHeaders: [
+              { name: 'content-type', value: 'application/json' },
+            ],
+            body: Buffer.from(
+              JSON.stringify({
+                error: {
+                  code: 'INTERNAL_ERROR',
+                  message: 'Dashboard tidak dapat dimuat.',
+                  correlationId: 'dashboard-ui-browser-test',
+                },
+              }),
+            ).toString('base64'),
+          })
+          await client.send('Fetch.disable')
+          await client.waitFor(
+            "Boolean(document.querySelector('[data-dashboard-error=true][role=alert]'))",
+          )
+
+          await client.send('Fetch.enable', {
+            patterns: [
+              { urlPattern: '*/api/v1/dashboard', requestStage: 'Request' },
+            ],
+          })
+          const retryRequest = client.once<{ requestId: string }>(
+            'Fetch.requestPaused',
+          )
+          assert.equal(await client.evaluate(clickButton('Coba lagi')), true)
+          const retry = await retryRequest
+          await client.send('Fetch.fulfillRequest', {
+            requestId: retry.requestId,
+            responseCode: 200,
+            responseHeaders: [
+              { name: 'content-type', value: 'application/json' },
+            ],
+            body: Buffer.from(
+              JSON.stringify({
+                data: {
+                  context: {
+                    contractVersion: '1',
+                    generatedAt: '2026-02-01T00:00:00.000Z',
+                    degraded: true,
+                    degradedSources: ['member-core-snapshot'],
+                  },
+                  sections: [
+                    {
+                      id: 'member-overview',
+                      title: 'Member reference cache overview',
+                      state: 'empty',
+                      source: {
+                        kind: 'mock-cache',
+                        label: 'Cached core member references',
+                        provider: 'mock',
+                        financialSourceOfTruth: false,
+                      },
+                      metrics: [
+                        {
+                          key: 'total',
+                          label: 'Member references',
+                          value: 0,
+                          unit: 'count',
+                        },
+                      ],
+                    },
+                    {
+                      id: 'member-snapshot-health',
+                      title: 'Cached member snapshot health',
+                      state: 'unavailable',
+                      source: {
+                        kind: 'provider-snapshot',
+                        label: 'Cached core member snapshots',
+                        financialSourceOfTruth: false,
+                      },
+                      metrics: [],
+                      unavailableReason: 'source-unavailable',
+                    },
+                    {
+                      id: 'operational-report',
+                      title: 'Workspace workflow summary',
+                      state: 'available',
+                      source: {
+                        kind: 'workspace-derived',
+                        label: 'Derived Workspace summary',
+                        financialSourceOfTruth: false,
+                      },
+                      metrics: [
+                        {
+                          key: 'applications',
+                          label: 'Applications',
+                          value: 3,
+                          unit: 'count',
+                        },
+                      ],
+                    },
+                  ],
+                },
+              }),
+            ).toString('base64'),
+          })
+          await client.send('Fetch.disable')
+          await client.waitFor(
+            "Boolean(document.querySelector('[data-dashboard-degraded=true]') && document.querySelector('[data-dashboard-state=empty]') && document.querySelector('[data-dashboard-state=unavailable]') && document.querySelector('[data-dashboard-section=operational-report][data-section-state=available]'))",
+          )
+          assert.equal(
+            await client.evaluate(
+              "document.querySelector('[data-dashboard-state=unavailable]')?.textContent?.includes('berbeda dari nol')",
+            ),
+            true,
+          )
+
+          const logoutStatus = await client.evaluate<number>(
+            "fetch('/api/v1/auth/logout', { method: 'POST', credentials: 'include' }).then((response) => response.status)",
+          )
+          assert.equal(logoutStatus, 200)
+          await client.send('Network.clearBrowserCookies')
+          await client.navigate(`${origin}/login`)
+          await client.waitFor(
+            "document.querySelector('#email') instanceof HTMLInputElement",
+          )
+        },
+      )
+
+      await context.test(
         'loading, authenticated redirect, and account data are safe',
         async () => {
           await client.send('Network.clearBrowserCookies')
           await client.navigate(`${origin}/login`)
           await submitLogin(client, demoIdentities[1].email, password, true)
           await client.waitFor(
-            "location.pathname === '/' && document.body.textContent?.includes('Sesi aktif')",
+            "location.pathname === '/' && Boolean(document.querySelector('[data-dashboard-page=true]'))",
           )
           await client.navigate(`${origin}/login`)
           await client.waitFor(
-            "location.pathname === '/' && document.body.textContent?.includes('Sesi aktif')",
+            "location.pathname === '/' && Boolean(document.querySelector('[data-dashboard-page=true]'))",
           )
           await new Promise((resolve) => setTimeout(resolve, 500))
           assert.equal(await client.evaluate("location.pathname === '/'"), true)
@@ -614,22 +919,27 @@ test(
 
           await client.navigate(`${origin}/`)
           await client.waitFor(
-            "location.pathname === '/' && document.body.textContent?.includes('Ruang kerja siap digunakan')",
+            "location.pathname === '/' && Boolean(document.querySelector('[data-dashboard-page=true]'))",
           )
           const geometry = await client.evaluate<{
             sidebarWidth: number
             headerHeight: number
             mainLeft: number
             viewportWidth: number
+            sectionCount: number
+            sectionColumns: number
           }>(`(() => {
             const sidebar = document.querySelector('aside')?.getBoundingClientRect()
             const header = document.querySelector('header')?.getBoundingClientRect()
             const main = document.querySelector('main#main-content')?.getBoundingClientRect()
+            const sections = [...document.querySelectorAll('[data-dashboard-section]')].map((item) => item.getBoundingClientRect())
             return {
               sidebarWidth: sidebar?.width ?? 0,
               headerHeight: header?.height ?? 0,
               mainLeft: main?.left ?? 0,
               viewportWidth: innerWidth,
+              sectionCount: sections.length,
+              sectionColumns: new Set(sections.map(({ left }) => left)).size,
             }
           })()`)
           assert.deepEqual(geometry, {
@@ -637,6 +947,8 @@ test(
             headerHeight: 72,
             mainLeft: 240,
             viewportWidth: 1440,
+            sectionCount: 4,
+            sectionColumns: 2,
           })
 
           await client.send('Emulation.setDeviceMetricsOverride', {
@@ -646,13 +958,22 @@ test(
             mobile: false,
           })
           const laptop = await client.evaluate<{
-            width: number
+            viewportWidth: number
+            horizontalOverflow: boolean
             sidebarWidth: number
-          }>(`({
-            width: document.documentElement.scrollWidth,
+            sectionColumns: number
+          }>(`(() => ({
+            viewportWidth: innerWidth,
+            horizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
             sidebarWidth: document.querySelector('aside')?.getBoundingClientRect().width ?? 0,
-          })`)
-          assert.deepEqual(laptop, { width: 1024, sidebarWidth: 240 })
+            sectionColumns: new Set([...document.querySelectorAll('[data-dashboard-section]')].map((item) => item.getBoundingClientRect().left)).size,
+          }))()`)
+          assert.deepEqual(laptop, {
+            viewportWidth: 1024,
+            horizontalOverflow: false,
+            sidebarWidth: 240,
+            sectionColumns: 2,
+          })
 
           await client.send('Emulation.setDeviceMetricsOverride', {
             width: 1440,
@@ -709,7 +1030,7 @@ test(
           )
           await submitLogin(client, demoIdentities[1].email, password)
           await client.waitFor(
-            "location.pathname === '/' && document.body.textContent?.includes('Sesi aktif')",
+            "location.pathname === '/' && Boolean(document.querySelector('[data-dashboard-page=true]'))",
           )
           await client.evaluate(
             "document.querySelector('summary')?.click(); true",
@@ -755,31 +1076,51 @@ test(
 
           await submitLogin(client, demoIdentities[1].email, password)
           await client.waitFor(
-            "location.pathname === '/' && document.body.textContent?.includes('Ruang kerja siap digunakan')",
+            "location.pathname === '/' && Boolean(document.querySelector('[data-dashboard-page=true]'))",
           )
           const shellLayout = await client.evaluate<{
             width: number
             shellCount: number
             sidebarWidth: number
+            headerHeight: number
             triggerVisible: boolean
+            triggerRight: number
+            titleLeft: number
+            titleRight: number
+            accountLeft: number
             mainWidth: number
+            sectionColumns: number
           }>(`(() => {
             const sidebar = document.querySelector('aside')?.getBoundingClientRect()
+            const header = document.querySelector('header[data-app-header=true]')?.getBoundingClientRect()
             const trigger = document.querySelector('button[aria-label="Buka navigasi"]')
+            const triggerBounds = trigger?.getBoundingClientRect()
+            const title = document.querySelector('header[data-app-header=true] h1')?.getBoundingClientRect()
+            const account = document.querySelector('header[data-app-header=true] summary')?.getBoundingClientRect()
             const main = document.querySelector('main#main-content')?.getBoundingClientRect()
             return {
               width: document.documentElement.scrollWidth,
               shellCount: document.querySelectorAll('[data-app-shell=true]').length,
               sidebarWidth: sidebar?.width ?? 0,
+              headerHeight: header?.height ?? 0,
               triggerVisible: trigger ? getComputedStyle(trigger).display !== 'none' : false,
+              triggerRight: triggerBounds?.right ?? 0,
+              titleLeft: title?.left ?? 0,
+              titleRight: title?.right ?? 0,
+              accountLeft: account?.left ?? 0,
               mainWidth: main?.width ?? 0,
+              sectionColumns: new Set([...document.querySelectorAll('[data-dashboard-section]')].map((item) => item.getBoundingClientRect().left)).size,
             }
           })()`)
           assert.equal(shellLayout.width, 390)
           assert.equal(shellLayout.shellCount, 1)
           assert.equal(shellLayout.sidebarWidth, 0)
+          assert.equal(shellLayout.headerHeight, 72)
           assert.equal(shellLayout.triggerVisible, true)
+          assert.ok(shellLayout.triggerRight <= shellLayout.titleLeft)
+          assert.ok(shellLayout.titleRight <= shellLayout.accountLeft)
           assert.ok(shellLayout.mainWidth > 0 && shellLayout.mainWidth <= 390)
+          assert.equal(shellLayout.sectionColumns, 1)
 
           assert.equal(
             await client.evaluate(

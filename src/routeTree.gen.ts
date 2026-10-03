@@ -13,6 +13,7 @@ import { Route as AuthenticatedRouteImport } from './routes/_authenticated'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as AuthenticatedIndexRouteImport } from './routes/_authenticated.index'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
+import { Route as ApiV1DashboardRouteImport } from './routes/api/v1/dashboard'
 import { Route as ApiV1AuthLoginRouteImport } from './routes/api/v1/auth/login'
 import { Route as ApiV1AuthLogoutRouteImport } from './routes/api/v1/auth/logout'
 import { Route as ApiV1AuthSessionRouteImport } from './routes/api/v1/auth/session'
@@ -36,6 +37,11 @@ const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   path: '/api/auth/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiV1DashboardRoute = ApiV1DashboardRouteImport.update({
+  id: '/api/v1/dashboard',
+  path: '/api/v1/dashboard',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiV1AuthLoginRoute = ApiV1AuthLoginRouteImport.update({
   id: '/api/v1/auth/login',
   path: '/api/v1/auth/login',
@@ -56,6 +62,7 @@ export interface FileRoutesByFullPath {
   '/': typeof AuthenticatedIndexRoute
   '/login': typeof LoginRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/v1/dashboard': typeof ApiV1DashboardRoute
   '/api/v1/auth/login': typeof ApiV1AuthLoginRoute
   '/api/v1/auth/logout': typeof ApiV1AuthLogoutRoute
   '/api/v1/auth/session': typeof ApiV1AuthSessionRoute
@@ -64,6 +71,7 @@ export interface FileRoutesByTo {
   '/login': typeof LoginRoute
   '/': typeof AuthenticatedIndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/v1/dashboard': typeof ApiV1DashboardRoute
   '/api/v1/auth/login': typeof ApiV1AuthLoginRoute
   '/api/v1/auth/logout': typeof ApiV1AuthLogoutRoute
   '/api/v1/auth/session': typeof ApiV1AuthSessionRoute
@@ -74,6 +82,7 @@ export interface FileRoutesById {
   '/login': typeof LoginRoute
   '/_authenticated/': typeof AuthenticatedIndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/v1/dashboard': typeof ApiV1DashboardRoute
   '/api/v1/auth/login': typeof ApiV1AuthLoginRoute
   '/api/v1/auth/logout': typeof ApiV1AuthLogoutRoute
   '/api/v1/auth/session': typeof ApiV1AuthSessionRoute
@@ -84,6 +93,7 @@ export interface FileRouteTypes {
     | '/'
     | '/login'
     | '/api/auth/$'
+    | '/api/v1/dashboard'
     | '/api/v1/auth/login'
     | '/api/v1/auth/logout'
     | '/api/v1/auth/session'
@@ -92,6 +102,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/'
     | '/api/auth/$'
+    | '/api/v1/dashboard'
     | '/api/v1/auth/login'
     | '/api/v1/auth/logout'
     | '/api/v1/auth/session'
@@ -101,6 +112,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/_authenticated/'
     | '/api/auth/$'
+    | '/api/v1/dashboard'
     | '/api/v1/auth/login'
     | '/api/v1/auth/logout'
     | '/api/v1/auth/session'
@@ -110,6 +122,7 @@ export interface RootRouteChildren {
   AuthenticatedRoute: typeof AuthenticatedRouteWithChildren
   LoginRoute: typeof LoginRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
+  ApiV1DashboardRoute: typeof ApiV1DashboardRoute
   ApiV1AuthLoginRoute: typeof ApiV1AuthLoginRoute
   ApiV1AuthLogoutRoute: typeof ApiV1AuthLogoutRoute
   ApiV1AuthSessionRoute: typeof ApiV1AuthSessionRoute
@@ -143,6 +156,13 @@ declare module '@tanstack/react-router' {
       path: '/api/auth/$'
       fullPath: '/api/auth/$'
       preLoaderRoute: typeof ApiAuthSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/v1/dashboard': {
+      id: '/api/v1/dashboard'
+      path: '/api/v1/dashboard'
+      fullPath: '/api/v1/dashboard'
+      preLoaderRoute: typeof ApiV1DashboardRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/v1/auth/login': {
@@ -185,6 +205,7 @@ const rootRouteChildren: RootRouteChildren = {
   AuthenticatedRoute: AuthenticatedRouteWithChildren,
   LoginRoute: LoginRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
+  ApiV1DashboardRoute: ApiV1DashboardRoute,
   ApiV1AuthLoginRoute: ApiV1AuthLoginRoute,
   ApiV1AuthLogoutRoute: ApiV1AuthLogoutRoute,
   ApiV1AuthSessionRoute: ApiV1AuthSessionRoute,

@@ -2,11 +2,19 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import {
+  AppHeader,
+  DEFAULT_APP_HEADER_CONTEXT,
+  resolveAppHeaderContext,
+} from '#/components/app-header'
+import {
   AppShell,
   ShellErrorState,
   ShellLoadingState,
 } from '#/components/app-shell'
-import { runLogoutWorkflow } from '#/integrations/better-auth/account-menu'
+import {
+  roleDisplayLabel,
+  runLogoutWorkflow,
+} from '#/integrations/better-auth/account-menu'
 import {
   AuthPageLayout,
   LoginView,
@@ -38,6 +46,42 @@ const authenticatedSession = {
   },
 }
 
+test('shared header resolves the deepest page context with a safe fallback', () => {
+  assert.deepEqual(resolveAppHeaderContext([]), DEFAULT_APP_HEADER_CONTEXT)
+  assert.deepEqual(
+    resolveAppHeaderContext([
+      { title: 'Parent', subtitle: 'Parent context' },
+      undefined,
+      { title: 'Child', subtitle: 'Child context' },
+    ]),
+    { title: 'Child', subtitle: 'Child context' },
+  )
+
+  const markup = renderToStaticMarkup(
+    <AppHeader
+      account={<button type="button">Account</button>}
+      context={{ title: 'Dasbor', subtitle: 'Ruang Kerja Digital Hanura' }}
+      navigation={<button type="button">Menu</button>}
+    />,
+  )
+  assert.match(markup, /data-app-header="true"/)
+  assert.match(markup, /h-\[72px\]/)
+  assert.match(markup, /<h1[^>]*>Dasbor<\/h1>/)
+  assert.match(markup, /Ruang Kerja Digital Hanura/)
+  assert.match(markup, />Menu</)
+  assert.match(markup, />Account</)
+})
+
+test('account presentation uses safe human-readable role labels', () => {
+  assert.equal(roleDisplayLabel('CHAIRMAN'), 'Ketua / Pengurus')
+  assert.equal(roleDisplayLabel('MANAGER'), 'Manajer')
+  assert.equal(roleDisplayLabel('CREDIT_OFFICER'), 'Petugas Kredit')
+  assert.equal(roleDisplayLabel('TELLER'), 'Teller / Staf')
+  assert.equal(roleDisplayLabel('ADMIN'), 'Administrator')
+  assert.equal(roleDisplayLabel('UNKNOWN_ROLE'), 'Pengguna')
+  assert.equal(roleDisplayLabel(), 'Pengguna')
+})
+
 test('application shell exposes one accessible structural layout', () => {
   const markup = renderToStaticMarkup(
     <AppShell account={<button type="button">Account</button>}>
@@ -47,7 +91,9 @@ test('application shell exposes one accessible structural layout', () => {
 
   assert.equal((markup.match(/data-app-shell="true"/g) ?? []).length, 1)
   assert.match(markup, /grid-cols-\[240px_minmax\(0,1fr\)\]/)
+  assert.match(markup, /data-app-header="true"/)
   assert.match(markup, /h-\[72px\]/)
+  assert.match(markup, /<h1[^>]*>Ruang Kerja Digital<\/h1>/)
   assert.match(markup, /<aside/)
   assert.doesNotMatch(markup, /<nav aria-label="Navigasi utama"/)
   assert.doesNotMatch(markup, /data-shell-navigation-slot="true"/)
@@ -62,6 +108,8 @@ test('application shell exposes one accessible structural layout', () => {
 
 test('shell loading and failure states do not render protected content', () => {
   const loading = renderToStaticMarkup(<ShellLoadingState />)
+  assert.match(loading, /data-app-header="true"/)
+  assert.equal((loading.match(/<h1/g) ?? []).length, 1)
   assert.match(loading, /aria-busy="true"/)
   assert.match(loading, /Memuat ruang kerja…/)
   assert.doesNotMatch(loading, /Sesi aktif|Ruang kerja siap digunakan/)
@@ -69,6 +117,9 @@ test('shell loading and failure states do not render protected content', () => {
   const failure = renderToStaticMarkup(
     <ShellErrorState onRetry={() => undefined} />,
   )
+  assert.match(failure, /data-app-header="true"/)
+  assert.equal((failure.match(/<h1/g) ?? []).length, 1)
+  assert.match(failure, /<h2[^>]*>Ruang kerja tidak dapat dimuat<\/h2>/)
   assert.match(failure, /role="alert"/)
   assert.match(failure, /aria-live="assertive"/)
   assert.match(failure, /Ruang kerja tidak dapat dimuat/)
@@ -214,6 +265,13 @@ test('login and logout client helpers use cookie-backed endpoints only', async (
   assert.equal(requests[0].credentials, 'include')
   assert.equal(requests[1].credentials, 'include')
   assert.doesNotMatch(await requests[1].text(), /password|token/i)
+})
+
+test('successful logout does not depend on parsing the response body', async () => {
+  const result = await logoutCurrentSession(
+    async () => new Response('malformed-but-successful', { status: 200 }),
+  )
+  assert.deepEqual(result, { data: { authenticated: false } })
 })
 
 test('logout workflow clears session and navigates only after success', async () => {

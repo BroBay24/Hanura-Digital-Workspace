@@ -1,4 +1,6 @@
 import type { ReactNode } from 'react'
+import type { AppHeaderContext } from './app-header.tsx'
+import { AppHeader, DEFAULT_APP_HEADER_CONTEXT } from './app-header.tsx'
 import { AppNavigation, NarrowNavigation } from './app-navigation.tsx'
 
 const ShellBrand = () => (
@@ -16,12 +18,12 @@ const ShellBrand = () => (
 export function AppShell({
   account,
   children,
-  header,
+  headerContext = DEFAULT_APP_HEADER_CONTEXT,
   permissions,
 }: {
   account: ReactNode
   children: ReactNode
-  header?: ReactNode
+  headerContext?: AppHeaderContext
   permissions?: readonly string[]
 }) {
   return (
@@ -47,24 +49,15 @@ export function AppShell({
       </aside>
 
       <div className="min-w-0">
-        <header className="flex h-[72px] items-center justify-between gap-3 border-b border-[#e2e8f0] bg-white px-5 sm:px-7">
-          {permissions ? <NarrowNavigation permissions={permissions} /> : null}
-          <div className="min-w-0 flex-1" data-shell-header-slot="true">
-            {header ?? (
-              <>
-                <p className="truncate text-xl leading-[29px] font-semibold">
-                  Ruang Kerja Digital
-                </p>
-                <p className="truncate text-[11px] leading-4 text-[#64748b]">
-                  Workspace internal Hanura
-                </p>
-              </>
-            )}
-          </div>
-          <div className="shrink-0" data-shell-account-slot="true">
-            {account}
-          </div>
-        </header>
+        <AppHeader
+          account={account}
+          context={headerContext}
+          navigation={
+            permissions ? (
+              <NarrowNavigation permissions={permissions} />
+            ) : undefined
+          }
+        />
 
         <main
           id="main-content"
@@ -85,9 +78,16 @@ const SafeShellAccountPlaceholder = () => (
   />
 )
 
-export function ShellLoadingState() {
+export function ShellLoadingState({
+  headerContext,
+}: {
+  headerContext?: AppHeaderContext
+}) {
   return (
-    <AppShell account={<SafeShellAccountPlaceholder />}>
+    <AppShell
+      account={<SafeShellAccountPlaceholder />}
+      headerContext={headerContext}
+    >
       <section
         aria-busy="true"
         aria-live="polite"
@@ -108,17 +108,26 @@ export function ShellLoadingState() {
   )
 }
 
-export function ShellErrorState({ onRetry }: { onRetry: () => void }) {
+export function ShellErrorState({
+  headerContext,
+  onRetry,
+}: {
+  headerContext?: AppHeaderContext
+  onRetry: () => void
+}) {
   return (
-    <AppShell account={<SafeShellAccountPlaceholder />}>
+    <AppShell
+      account={<SafeShellAccountPlaceholder />}
+      headerContext={headerContext}
+    >
       <section
         role="alert"
         aria-live="assertive"
         className="max-w-xl rounded-2xl border border-[#e2e8f0] bg-white p-6"
       >
-        <h1 className="text-xl font-semibold">
+        <h2 className="text-xl font-semibold">
           Ruang kerja tidak dapat dimuat
-        </h1>
+        </h2>
         <p className="mt-2 text-sm leading-6 text-[#64748b]">
           Sesi tidak dapat diverifikasi. Periksa jaringan dan coba lagi.
         </p>

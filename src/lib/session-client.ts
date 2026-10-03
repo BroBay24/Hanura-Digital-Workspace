@@ -119,14 +119,17 @@ export const loginWithPassword = async (
     }),
   )
 
-export const logoutCurrentSession = async (fetcher: typeof fetch = fetch) =>
-  responseBody<{ data: { authenticated: false } }>(
-    await fetcher('/api/v1/auth/logout', {
-      method: 'POST',
-      credentials: 'include',
-      headers: { accept: 'application/json' },
-    }),
-  )
+export const logoutCurrentSession = async (fetcher: typeof fetch = fetch) => {
+  const response = await fetcher('/api/v1/auth/logout', {
+    method: 'POST',
+    credentials: 'include',
+    headers: { accept: 'application/json' },
+  })
+  if (!response.ok) {
+    return responseBody<{ data: { authenticated: false } }>(response)
+  }
+  return { data: { authenticated: false as const } }
+}
 
 export const useAuthSession = () =>
   useQuery({
