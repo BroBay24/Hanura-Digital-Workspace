@@ -57,14 +57,18 @@ test('navigation registry is unique, permission-valid, and route-safe', () => {
         assert.equal(permissionCatalog.has(permission), true)
       }
     }
-    if (item.availability === 'available') assert.equal(item.href, '/')
   }
 
-  assert.equal(
-    NAVIGATION_REGISTRY.filter(
-      ({ availability }) => availability === 'available',
-    ).length,
-    1,
+  assert.deepEqual(
+    NAVIGATION_REGISTRY.flatMap((item) =>
+      item.availability === 'available'
+        ? [{ id: item.id, href: item.href }]
+        : [],
+    ),
+    [
+      { id: 'dashboard', href: '/' },
+      { id: 'members', href: '/members' },
+    ],
   )
   assert.ok(
     NAVIGATION_REGISTRY.some(({ availability }) => availability === 'planned'),

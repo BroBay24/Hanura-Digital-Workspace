@@ -3,6 +3,7 @@ import { LogOut } from 'lucide-react'
 import { useNavigate } from '@tanstack/react-router'
 import { useQueryClient } from '@tanstack/react-query'
 import { dashboardQueryKey } from '#/lib/dashboard-client'
+import { memberQueryKey } from '#/lib/member-client'
 import type { AuthorizationSummary, SafeUser } from '#/lib/session-client'
 import { authSessionQueryKey, logoutCurrentSession } from '#/lib/session-client'
 
@@ -52,6 +53,7 @@ export function AccountMenu({
         clearSession: () => {
           queryClient.removeQueries({ queryKey: authSessionQueryKey })
           queryClient.removeQueries({ queryKey: dashboardQueryKey })
+          queryClient.removeQueries({ queryKey: memberQueryKey })
         },
         navigateToLogin: () => navigate({ to: '/login', replace: true }),
       })

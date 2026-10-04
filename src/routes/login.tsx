@@ -5,6 +5,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { z } from 'zod'
 import type { LoginFieldErrors } from '#/integrations/better-auth/login-view'
 import { dashboardQueryKey } from '#/lib/dashboard-client'
+import { memberQueryKey } from '#/lib/member-client'
 import {
   LoginView,
   SessionExpiredView,
@@ -82,6 +83,7 @@ function LoginPage() {
     try {
       await loginWithPassword(parsed.data)
       queryClient.removeQueries({ queryKey: dashboardQueryKey })
+      queryClient.removeQueries({ queryKey: memberQueryKey })
       const nextSession = await queryClient.fetchQuery({
         queryKey: authSessionQueryKey,
         queryFn: () => fetchAuthSession(),

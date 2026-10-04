@@ -24,7 +24,7 @@ type NavigationItemBase = {
 
 export type NavigationItem = NavigationItemBase &
   (
-    | { availability: 'available'; href: '/' }
+    | { availability: 'available'; href: '/' | '/members' }
     | { availability: 'planned'; plannedPath: string }
   )
 
@@ -41,8 +41,8 @@ export const NAVIGATION_REGISTRY = [
     id: 'members',
     label: 'Anggota',
     group: 'operations',
-    availability: 'planned',
-    plannedPath: '/members',
+    availability: 'available',
+    href: '/members',
     requiredAnyPermission: [PERMISSION_CODES.MEMBER_READ],
   },
   {

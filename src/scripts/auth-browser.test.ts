@@ -388,9 +388,99 @@ const unauthenticatedBody = {
   },
 }
 
+const memberBrowserModel = ({
+  degraded = false,
+  displayName,
+  memberReference,
+  page = 1,
+  pageSize = 1,
+  query = '',
+  snapshotState = 'present',
+  total = 1,
+  totalPages = 1,
+}: {
+  degraded?: boolean
+  displayName?: string
+  memberReference?: string
+  page?: number
+  pageSize?: number
+  query?: string
+  snapshotState?: 'present' | 'unavailable'
+  total?: number
+  totalPages?: number
+}) => ({
+  data: {
+    context: {
+      contractVersion: '1',
+      generatedAt: '2026-02-01T00:00:00.000Z',
+      degraded,
+      degradedSources: degraded ? ['member-core-snapshot'] : [],
+    },
+    query,
+    members:
+      displayName && memberReference
+        ? [
+            {
+              id: '10000000-0000-4000-8000-000000000001',
+              displayName,
+              memberReference,
+              status: 'ACTIVE',
+              source: {
+                kind: 'mock-cache',
+                label: 'Cached core member reference',
+                provider: 'mock',
+                financialSourceOfTruth: false,
+              },
+              snapshot:
+                snapshotState === 'present'
+                  ? {
+                      state: 'present',
+                      freshness: 'fresh',
+                      fetchedAt: '2026-02-01T00:00:00.000Z',
+                      expiresAt: null,
+                      source: {
+                        kind: 'mock-snapshot',
+                        label: 'Cached core member snapshot',
+                        provider: 'mock',
+                        financialSourceOfTruth: false,
+                      },
+                    }
+                  : {
+                      state: 'unavailable',
+                      unavailableReason: 'source-unavailable',
+                    },
+              updatedAt: '2026-02-01T00:00:00.000Z',
+            },
+          ]
+        : [],
+    pagination: { page, pageSize, total, totalPages },
+  },
+})
+
+const identifyRequest = async <T>(label: string, request: Promise<T>) => {
+  try {
+    return await request
+  } catch (error) {
+    throw new Error(`${label}: ${(error as Error).message}`)
+  }
+}
+
+const fulfillJson = (
+  client: CdpClient,
+  requestId: string,
+  responseCode: number,
+  body: unknown,
+) =>
+  client.send('Fetch.fulfillRequest', {
+    requestId,
+    responseCode,
+    responseHeaders: [{ name: 'content-type', value: 'application/json' }],
+    body: Buffer.from(JSON.stringify(body)).toString('base64'),
+  })
+
 test(
   'browser authentication and session UX integrates with the application contract',
-  { timeout: 180_000 },
+  { timeout: 240_000 },
   async (context) => {
     const profile = await mkdtemp(join(tmpdir(), 'hdw-auth-browser-'))
     let baselineSessionIds = new Set<string>()
@@ -717,12 +807,19 @@ test(
                 activeIds: items.filter((item) => item.getAttribute('aria-current') === 'page').map((item) => item.getAttribute('data-navigation-item') ?? ''),
               }
             })()`)
+            const canReadMembers = identity.role !== 'ADMIN'
             assert.deepEqual(navigation.ids, roleNavigation[identity.role])
             assert.deepEqual(
               navigation.disabledIds,
-              roleNavigation[identity.role].filter((id) => id !== 'dashboard'),
+              roleNavigation[identity.role].filter(
+                (id) =>
+                  id !== 'dashboard' && !(canReadMembers && id === 'members'),
+              ),
             )
-            assert.deepEqual(navigation.hrefs, ['/'])
+            assert.deepEqual(
+              navigation.hrefs,
+              canReadMembers ? ['/', '/members'] : ['/'],
+            )
             assert.deepEqual(navigation.activeIds, ['dashboard'])
             assert.equal(
               await client.evaluate(
@@ -747,6 +844,104 @@ test(
             for (const value of [...storage.local, ...storage.session]) {
               assert.equal(value.includes(password), false)
               assert.doesNotMatch(value, /session[_-]?token|bearer\s|jwt/i)
+            }
+
+            if (canReadMembers) {
+              assert.equal(
+                await client.evaluate(
+                  'document.querySelector(\'aside [data-navigation-item="members"]\')?.click(); true',
+                ),
+                true,
+              )
+              await client.waitFor(
+                "location.pathname === '/members' && Boolean(document.querySelector('[data-members-page=true]')) && document.querySelectorAll('[data-member-row]').length > 0",
+              )
+              const memberPage = await client.evaluate<{
+                activeIds: Array<string>
+                headingCount: number
+                inputLabel: string
+                nextDisabled: boolean
+                previousDisabled: boolean
+                references: Array<string>
+                title: string
+              }>(`(() => ({
+                activeIds: [...document.querySelectorAll('aside [data-navigation-item][aria-current=page]')].map((item) => item.getAttribute('data-navigation-item') ?? ''),
+                headingCount: document.querySelectorAll('h1').length,
+                inputLabel: document.querySelector('label[for=member-search]')?.textContent?.trim() ?? '',
+                nextDisabled: document.querySelector('button:nth-of-type(2)')?.hasAttribute('disabled') ?? false,
+                previousDisabled: [...document.querySelectorAll('button')].find((item) => item.textContent?.trim() === 'Sebelumnya')?.hasAttribute('disabled') ?? false,
+                references: [...document.querySelectorAll('[data-member-row]')].map((item) => item.getAttribute('data-member-row') ?? ''),
+                title: document.querySelector('header[data-app-header=true] h1')?.textContent?.trim() ?? '',
+              }))()`)
+              assert.deepEqual(memberPage.activeIds, ['members'])
+              assert.equal(memberPage.headingCount, 1)
+              assert.equal(memberPage.inputLabel, 'Cari anggota')
+              assert.equal(memberPage.previousDisabled, true)
+              assert.equal(memberPage.nextDisabled, true)
+              assert.ok(memberPage.references.includes('MOCK-MBR-001'))
+              assert.equal(memberPage.title, 'Anggota')
+
+              assert.equal(
+                await client.evaluate(
+                  setInput('member-search', '  anggota   demo 003  '),
+                ),
+                true,
+              )
+              assert.equal(
+                await client.evaluate(
+                  "document.querySelector('form[role=search]')?.requestSubmit(); true",
+                ),
+                true,
+              )
+              await client.waitFor(
+                "new URLSearchParams(location.search).get('q') === 'anggota demo 003' && document.querySelectorAll('[data-member-row=\"MOCK-MBR-003\"]').length === 2 && document.querySelectorAll('[data-member-row]').length === 2",
+              )
+              assert.deepEqual(
+                await client.evaluate<Array<string>>(
+                  "[...document.querySelectorAll('[data-member-row]')].map((item) => item.getAttribute('data-member-row') ?? '')",
+                ),
+                ['MOCK-MBR-003', 'MOCK-MBR-003'],
+              )
+              assert.equal(
+                await client.evaluate(
+                  'document.querySelector(\'button[aria-label="Hapus pencarian"]\')?.click(); true',
+                ),
+                true,
+              )
+              await client.waitFor(
+                "new URLSearchParams(location.search).get('q') === '' && document.querySelectorAll('[data-member-row]').length >= 10",
+              )
+              await client.evaluate(
+                'document.querySelector(\'aside [data-navigation-item="dashboard"]\')?.click(); true',
+              )
+              await client.waitFor(
+                "location.pathname === '/' && Boolean(document.querySelector('[data-dashboard-page=true]'))",
+              )
+            } else {
+              await client.navigate(`${origin}/members`)
+              await client.waitFor(
+                "location.pathname === '/members' && Boolean(document.querySelector('[data-members-forbidden=true]'))",
+              )
+              assert.equal(
+                await client.evaluate(
+                  "document.querySelectorAll('[data-member-row]').length",
+                ),
+                0,
+              )
+              const forbiddenMemberApi = await client.evaluate<{
+                body: { error: { code: string } }
+                status: number
+              }>(`fetch('/api/v1/members?role=CHAIRMAN&permission=member.read', {
+                headers: { 'x-role': 'CHAIRMAN', 'x-permission': 'member.read' },
+              }).then(async (response) => ({ status: response.status, body: await response.json() }))`)
+              assert.equal(forbiddenMemberApi.status, 403)
+              assert.equal(forbiddenMemberApi.body.error.code, 'FORBIDDEN')
+              await client.evaluate(
+                'document.querySelector(\'aside [data-navigation-item="dashboard"]\')?.click(); true',
+              )
+              await client.waitFor(
+                "location.pathname === '/' && Boolean(document.querySelector('[data-dashboard-page=true]'))",
+              )
             }
 
             const cookies = await client.send<{
@@ -816,6 +1011,414 @@ test(
           },
         )
       }
+
+      await context.test(
+        'member directory search, server pagination, states, retry, and responsive layouts work',
+        async () => {
+          await client.send('Network.clearBrowserCookies')
+          await client.navigate(`${origin}/login`)
+          await submitLogin(client, demoIdentities[3].email, password)
+          await client.waitFor(
+            "location.pathname === '/' && Boolean(document.querySelector('[data-dashboard-page=true]'))",
+          )
+
+          await client.send('Fetch.enable', {
+            patterns: [
+              { urlPattern: '*/api/v1/members*', requestStage: 'Request' },
+            ],
+          })
+          const initialRequest = client.once<{
+            request: { url: string }
+            requestId: string
+          }>('Fetch.requestPaused')
+          await client.send('Page.navigate', { url: `${origin}/members` })
+          const initial = await identifyRequest(
+            'member initial',
+            initialRequest,
+          )
+          await client.waitFor(
+            "Boolean(document.querySelector('[data-members-loading=true]')) && document.querySelectorAll('[data-member-row]').length === 0",
+          )
+          assert.equal(
+            new URL(initial.request.url).searchParams.get('page'),
+            '1',
+          )
+          assert.equal(
+            new URL(initial.request.url).searchParams.get('pageSize'),
+            '20',
+          )
+          await fulfillJson(
+            client,
+            initial.requestId,
+            200,
+            memberBrowserModel({
+              displayName: 'PAGE ONE MEMBER',
+              memberReference: 'PAGE-ONE',
+              pageSize: 1,
+              total: 2,
+              totalPages: 2,
+            }),
+          )
+          await client.send('Fetch.disable')
+          await client.waitFor(
+            "document.body.textContent?.includes('PAGE ONE MEMBER') && Boolean(document.querySelector('[data-members-page=true]'))",
+          )
+
+          const desktop = await client.evaluate<{
+            cardVisible: boolean
+            overflow: boolean
+            tableVisible: boolean
+          }>(`(() => ({
+            cardVisible: (document.querySelector('ul[aria-label="Daftar anggota"]')?.getBoundingClientRect().width ?? 0) > 0,
+            overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+            tableVisible: (document.querySelector('table')?.getBoundingClientRect().width ?? 0) > 0,
+          }))()`)
+          assert.deepEqual(desktop, {
+            cardVisible: false,
+            overflow: false,
+            tableVisible: true,
+          })
+
+          await client.send('Emulation.setDeviceMetricsOverride', {
+            width: 1024,
+            height: 768,
+            deviceScaleFactor: 1,
+            mobile: false,
+          })
+          assert.deepEqual(
+            await client.evaluate(`(() => ({
+              overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+              tableVisible: (document.querySelector('table')?.getBoundingClientRect().width ?? 0) > 0,
+            }))()`),
+            { overflow: false, tableVisible: true },
+          )
+
+          await client.send('Emulation.setDeviceMetricsOverride', {
+            width: 390,
+            height: 844,
+            deviceScaleFactor: 1,
+            mobile: true,
+          })
+          const narrow = await client.evaluate<{
+            cardVisible: boolean
+            inputWidth: number
+            nextWidth: number
+            overflow: boolean
+            tableVisible: boolean
+          }>(`(() => ({
+            cardVisible: (document.querySelector('ul[aria-label="Daftar anggota"]')?.getBoundingClientRect().width ?? 0) > 0,
+            inputWidth: document.querySelector('#member-search')?.getBoundingClientRect().width ?? 0,
+            nextWidth: [...document.querySelectorAll('button')].find((item) => item.textContent?.trim() === 'Berikutnya')?.getBoundingClientRect().width ?? 0,
+            overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+            tableVisible: (document.querySelector('table')?.getBoundingClientRect().width ?? 0) > 0,
+          }))()`)
+          assert.equal(narrow.cardVisible, true)
+          assert.ok(narrow.inputWidth > 0)
+          assert.ok(narrow.nextWidth > 0)
+          assert.equal(narrow.overflow, false)
+          assert.equal(narrow.tableVisible, false)
+          await client.send('Emulation.setDeviceMetricsOverride', {
+            width: 1440,
+            height: 900,
+            deviceScaleFactor: 1,
+            mobile: false,
+          })
+
+          await client.send('Fetch.enable', {
+            patterns: [
+              { urlPattern: '*/api/v1/members*', requestStage: 'Request' },
+            ],
+          })
+          const nextRequest = client.once<{
+            request: { url: string }
+            requestId: string
+          }>('Fetch.requestPaused')
+          assert.equal(await client.evaluate(clickButton('Berikutnya')), true)
+          const next = await identifyRequest('member next page', nextRequest)
+          assert.equal(new URL(next.request.url).searchParams.get('page'), '2')
+          await fulfillJson(
+            client,
+            next.requestId,
+            200,
+            memberBrowserModel({
+              displayName: 'PAGE TWO MEMBER',
+              memberReference: 'PAGE-TWO',
+              page: 2,
+              pageSize: 1,
+              total: 2,
+              totalPages: 2,
+            }),
+          )
+          await client.send('Fetch.disable')
+          await client.waitFor(
+            "document.body.textContent?.includes('PAGE TWO MEMBER') && !document.body.textContent?.includes('PAGE ONE MEMBER')",
+          )
+          assert.equal(
+            await client.evaluate(
+              "[...document.querySelectorAll('button')].find((item) => item.textContent?.trim() === 'Berikutnya')?.hasAttribute('disabled')",
+            ),
+            true,
+          )
+
+          await client.send('Fetch.enable', {
+            patterns: [
+              { urlPattern: '*/api/v1/members*', requestStage: 'Request' },
+            ],
+          })
+          const noResultRequest = client.once<{
+            request: { url: string }
+            requestId: string
+          }>('Fetch.requestPaused')
+          assert.equal(
+            await client.evaluate(
+              setInput('member-search', '  tidak   ditemukan  '),
+            ),
+            true,
+          )
+          await client.evaluate(
+            "document.querySelector('form[role=search]')?.requestSubmit(); true",
+          )
+          const noResult = await identifyRequest(
+            'member no result',
+            noResultRequest,
+          )
+          const noResultUrl = new URL(noResult.request.url)
+          assert.equal(noResultUrl.searchParams.get('q'), 'tidak ditemukan')
+          assert.equal(noResultUrl.searchParams.get('page'), '1')
+          await fulfillJson(
+            client,
+            noResult.requestId,
+            200,
+            memberBrowserModel({
+              pageSize: 20,
+              query: 'tidak ditemukan',
+              total: 0,
+              totalPages: 0,
+            }),
+          )
+          await client.send('Fetch.disable')
+          await client.waitFor(
+            "document.querySelector('[data-members-empty=search]')?.textContent?.includes('Anggota tidak ditemukan')",
+          )
+          assert.equal(
+            await client.evaluate(
+              "document.querySelector('#member-search')?.value === 'tidak ditemukan'",
+            ),
+            true,
+          )
+
+          assert.equal(
+            await client.evaluate(
+              'document.querySelector(\'button[aria-label="Hapus pencarian"]\')?.click(); true',
+            ),
+            true,
+          )
+          await client.waitFor(
+            "new URLSearchParams(location.search).get('q') === '' && document.body.textContent?.includes('PAGE ONE MEMBER')",
+          )
+          await client.send('Fetch.enable', {
+            patterns: [
+              { urlPattern: '*/api/v1/members*', requestStage: 'Request' },
+            ],
+          })
+          const emptyRequest = client.once<{
+            request: { url: string }
+            requestId: string
+          }>('Fetch.requestPaused')
+          await client.send('Page.navigate', {
+            url: `${origin}/members?q=&page=3`,
+          })
+          const empty = await identifyRequest('member empty', emptyRequest)
+          assert.equal(new URL(empty.request.url).searchParams.get('q'), null)
+          assert.equal(new URL(empty.request.url).searchParams.get('page'), '3')
+          await fulfillJson(
+            client,
+            empty.requestId,
+            200,
+            memberBrowserModel({
+              page: 3,
+              pageSize: 20,
+              total: 0,
+              totalPages: 0,
+            }),
+          )
+          await client.send('Fetch.disable')
+          await client.waitFor(
+            "document.querySelector('[data-members-empty=directory]')?.textContent?.includes('Direktori anggota masih kosong')",
+          )
+
+          await client.send('Fetch.enable', {
+            patterns: [
+              { urlPattern: '*/api/v1/members*', requestStage: 'Request' },
+            ],
+          })
+          const failedRequest = client.once<{ requestId: string }>(
+            'Fetch.requestPaused',
+          )
+          assert.equal(
+            await client.evaluate(setInput('member-search', 'gagal')),
+            true,
+          )
+          await client.evaluate(
+            "document.querySelector('form[role=search]')?.requestSubmit(); true",
+          )
+          const failed = await identifyRequest('member failure', failedRequest)
+          await fulfillJson(client, failed.requestId, 500, {
+            error: {
+              code: 'INTERNAL_ERROR',
+              message: 'Daftar anggota tidak dapat dimuat.',
+              correlationId: 'member-browser-safe-reference',
+            },
+          })
+          await client.send('Fetch.disable')
+          await client.waitFor(
+            "Boolean(document.querySelector('[data-members-error=request][role=alert]'))",
+          )
+          assert.equal(
+            await client.evaluate(
+              "document.querySelector('[data-app-shell=true]') !== null",
+            ),
+            true,
+          )
+
+          await client.send('Fetch.enable', {
+            patterns: [
+              { urlPattern: '*/api/v1/members*', requestStage: 'Request' },
+            ],
+          })
+          const retryRequest = client.once<{ requestId: string }>(
+            'Fetch.requestPaused',
+          )
+          assert.equal(await client.evaluate(clickButton('Coba lagi')), true)
+          const retry = await identifyRequest('member retry', retryRequest)
+          await fulfillJson(
+            client,
+            retry.requestId,
+            200,
+            memberBrowserModel({
+              degraded: true,
+              displayName: 'DEGRADED MEMBER',
+              memberReference: 'DEGRADED-001',
+              pageSize: 20,
+              query: 'gagal',
+              snapshotState: 'unavailable',
+            }),
+          )
+          await client.send('Fetch.disable')
+          await client.waitFor(
+            "Boolean(document.querySelector('[data-members-degraded=true]') && document.querySelector('[data-member-snapshot-state=unavailable]')) && document.body.textContent?.includes('DEGRADED MEMBER')",
+          )
+
+          await client.evaluate(
+            "document.querySelector('summary')?.click(); true",
+          )
+          assert.equal(await client.evaluate(clickButton('Keluar')), true)
+          await client.waitFor("location.pathname === '/login'")
+        },
+      )
+
+      await context.test(
+        'member cache is isolated across TELLER to ADMIN to TELLER switches',
+        async () => {
+          await client.send('Network.clearBrowserCookies')
+          await client.navigate(`${origin}/login`)
+          await submitLogin(client, demoIdentities[3].email, password)
+          await client.waitFor(
+            "location.pathname === '/' && Boolean(document.querySelector('[data-dashboard-page=true]'))",
+          )
+          await client.send('Fetch.enable', {
+            patterns: [
+              { urlPattern: '*/api/v1/members*', requestStage: 'Request' },
+            ],
+          })
+          const tellerRequest = client.once<{ requestId: string }>(
+            'Fetch.requestPaused',
+          )
+          await client.send('Page.navigate', { url: `${origin}/members` })
+          const teller = await tellerRequest
+          await fulfillJson(
+            client,
+            teller.requestId,
+            200,
+            memberBrowserModel({
+              displayName: 'TELLER CACHED MEMBER',
+              memberReference: 'TELLER-CACHED',
+              pageSize: 20,
+            }),
+          )
+          await client.send('Fetch.disable')
+          await client.waitFor(
+            "document.body.textContent?.includes('TELLER CACHED MEMBER')",
+          )
+          await client.evaluate(
+            "document.querySelector('summary')?.click(); true",
+          )
+          assert.equal(await client.evaluate(clickButton('Keluar')), true)
+          await client.waitFor("location.pathname === '/login'")
+
+          await submitLogin(client, demoIdentities[4].email, password)
+          await client.waitFor(
+            "location.pathname === '/' && Boolean(document.querySelector('[data-dashboard-page=true]'))",
+          )
+          await client.navigate(`${origin}/members`)
+          await client.waitFor(
+            "Boolean(document.querySelector('[data-members-forbidden=true]'))",
+          )
+          assert.equal(
+            await client.evaluate(
+              "document.body.textContent?.includes('TELLER CACHED MEMBER')",
+            ),
+            false,
+          )
+          assert.equal(
+            await client.evaluate<number>(
+              "fetch('/api/v1/auth/logout', { method: 'POST', credentials: 'include' }).then((response) => response.status)",
+            ),
+            200,
+          )
+          await client.navigate(`${origin}/login`)
+          await client.waitFor(
+            "location.pathname === '/login' && document.querySelector('#email') instanceof HTMLInputElement",
+          )
+
+          await submitLogin(client, demoIdentities[3].email, password)
+          await client.waitFor(
+            "location.pathname === '/' && Boolean(document.querySelector('[data-dashboard-page=true]'))",
+          )
+          await client.send('Fetch.enable', {
+            patterns: [
+              { urlPattern: '*/api/v1/members*', requestStage: 'Request' },
+            ],
+          })
+          const freshRequest = client.once<{ requestId: string }>(
+            'Fetch.requestPaused',
+          )
+          await client.send('Page.navigate', { url: `${origin}/members` })
+          const fresh = await freshRequest
+          await client.waitFor(
+            "Boolean(document.querySelector('[data-members-loading=true]')) && !document.body.textContent?.includes('TELLER CACHED MEMBER')",
+          )
+          await fulfillJson(
+            client,
+            fresh.requestId,
+            200,
+            memberBrowserModel({
+              displayName: 'TELLER FRESH MEMBER',
+              memberReference: 'TELLER-FRESH',
+              pageSize: 20,
+            }),
+          )
+          await client.send('Fetch.disable')
+          await client.waitFor(
+            "document.body.textContent?.includes('TELLER FRESH MEMBER') && !document.body.textContent?.includes('TELLER CACHED MEMBER')",
+          )
+          await client.evaluate(
+            "document.querySelector('summary')?.click(); true",
+          )
+          assert.equal(await client.evaluate(clickButton('Keluar')), true)
+          await client.waitFor("location.pathname === '/login'")
+        },
+      )
 
       await context.test(
         'dashboard cache is isolated across ADMIN to TELLER and CHAIRMAN to CREDIT_OFFICER switches',
@@ -1167,15 +1770,7 @@ test(
         'dashboard network failure preserves authenticated shell and retries successfully',
         async () => {
           await client.send('Network.clearBrowserCookies')
-          const loginStatus = await client.evaluate<number>(
-            `fetch('/api/v1/auth/login', {
-              method: 'POST',
-              credentials: 'include',
-              headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({ email: ${JSON.stringify(demoIdentities[1].email)}, password: ${JSON.stringify(password)} }),
-            }).then((response) => response.status)`,
-          )
-          assert.equal(loginStatus, 200)
+          await client.navigate(`${origin}/login`)
           await client.send('Fetch.enable', {
             patterns: [
               { urlPattern: '*/api/v1/dashboard', requestStage: 'Request' },
@@ -1184,8 +1779,11 @@ test(
           const failedRequest = client.once<{ requestId: string }>(
             'Fetch.requestPaused',
           )
-          await client.navigate(`${origin}/`)
+          await submitLogin(client, demoIdentities[1].email, password)
           const request = await failedRequest
+          await client.waitFor(
+            "location.pathname === '/' && Boolean(document.querySelector('[data-dashboard-loading=true]'))",
+          )
           await client.send('Fetch.failRequest', {
             requestId: request.requestId,
             errorReason: 'InternetDisconnected',
@@ -1233,11 +1831,37 @@ test(
           await client.waitFor(
             "location.pathname === '/' && Boolean(document.querySelector('[data-dashboard-page=true]'))",
           )
-          await client.navigate(`${origin}/login`)
+          assert.equal(
+            await client.evaluate(
+              "fetch('/api/v1/auth/session').then((response) => response.json()).then((body) => body.data.authenticated)",
+            ),
+            true,
+          )
+          await client.evaluate(
+            "history.pushState({}, '', '/login'); dispatchEvent(new PopStateEvent('popstate')); true",
+          )
           await client.waitFor(
             "location.pathname === '/' && Boolean(document.querySelector('[data-dashboard-page=true]'))",
           )
-          await new Promise((resolve) => setTimeout(resolve, 500))
+          const authenticatedRedirect = await client.evaluate<{
+            dashboard: boolean
+            login: boolean
+            pathname: string
+            session: boolean
+          }>(`Promise.all([
+            fetch('/api/v1/auth/session').then((response) => response.json()).then((body) => body.data.authenticated),
+          ]).then(([session]) => ({
+            dashboard: Boolean(document.querySelector('[data-dashboard-page=true]')),
+            login: document.querySelector('#email') instanceof HTMLInputElement,
+            pathname: location.pathname,
+            session,
+          }))`)
+          assert.deepEqual(authenticatedRedirect, {
+            dashboard: true,
+            login: false,
+            pathname: '/',
+            session: true,
+          })
           assert.equal(await client.evaluate("location.pathname === '/'"), true)
           assert.equal(
             await client.evaluate(
